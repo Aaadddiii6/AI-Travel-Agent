@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Booking Confirmed - AI Travel</title>
+    <meta name="description" content="Your travel booking has been confirmed successfully!">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        .success-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+        }
+        
+        .success-card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            animation: slideUp 0.6s ease-out;
+        }
+        
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .success-icon {
+            width: 100px;
+            height: 100px;
+            background: #4CAF50;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 30px;
+            font-size: 50px;
+            color: white;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.05);
+            }
+            100% {
+                transform: scale(1);
+            }
+        }
+        
+        .success-title {
+            font-size: 32px;
+            font-weight: 700;
+            color: #1a1a1a;
+            margin-bottom: 16px;
+        }
+        
+        .success-subtitle {
+            font-size: 18px;
+            color: #666;
+            margin-bottom: 30px;
+            line-height: 1.5;
+        }
+        
+        .booking-details {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 24px;
+            margin: 30px 0;
+            text-align: left;
+        }
+        
+        .booking-id {
+            background: #e3f2fd;
+            border-radius: 8px;
+            padding: 16px;
+            margin: 16px 0;
+            text-align: center;
+        }
+        
+        .booking-id-label {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+        
+        .booking-id-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #1976d2;
+            font-family: 'Courier New', monospace;
+            letter-spacing: 2px;
+        }
+        
+        .next-steps {
+            background: #fff3e0;
+            border-radius: 12px;
+            padding: 24px;
+            margin: 30px 0;
+        }
+        
+        .next-steps h4 {
+            color: #e65100;
+            margin-bottom: 16px;
+            font-size: 18px;
+        }
+        
+        .next-steps ul {
+            margin: 0;
+            padding-left: 20px;
+            color: #666;
+        }
+        
+        .next-steps li {
+            margin-bottom: 8px;
+            line-height: 1.4;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 16px;
+            margin-top: 30px;
+        }
+        
+        .btn {
+            flex: 1;
+            padding: 16px 24px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 500;
+            text-decoration: none;
+            text-align: center;
+            transition: all 0.3s;
+            cursor: pointer;
+            border: none;
+        }
+        
+        .btn-secondary {
+            background: white;
+            color: #666;
+            border: 2px solid #e1e5e9;
+        }
+        
+        .btn-secondary:hover {
+            background: #f8f9fa;
+            border-color: #667eea;
+            color: #667eea;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .confetti {
+            position: fixed;
+            width: 10px;
+            height: 10px;
+            background: #ff6b6b;
+            animation: confetti-fall 3s linear infinite;
+        }
+        
+        @keyframes confetti-fall {
+            to {
+                transform: translateY(100vh) rotate(360deg);
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .success-card {
+                padding: 30px 20px;
+            }
+            
+            .success-title {
+                font-size: 24px;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <a href="index.html" class="logo-link">
+                    <div class="logo-icon">
+                        <i class="fas fa-magic"></i>
+                        <div class="logo-dot"></div>
+                    </div>
+                    <div class="logo-text">
+                        <span class="logo-title">AI Travel</span>
+                        <div class="logo-subtitle">Visualize Your Dreams</div>
+                    </div>
+                </a>
+            </div>
+            
+            <div class="nav-menu" id="nav-menu">
+                <a href="upload.html" class="nav-link">
+                    <i class="fas fa-camera"></i>
+                    <span>Upload Photo</span>
+                </a>
+                <a href="destinations.html" class="nav-link">
+                    <i class="fas fa-globe"></i>
+                    <span>Destinations</span>
+                </a>
+                <a href="recommendations.html" class="nav-link">
+                    <i class="fas fa-magic"></i>
+                    <span>Recommendations</span>
+                </a>
+                <a href="booking.html" class="nav-link">
+                    <i class="fas fa-plane"></i>
+                    <span>Book Travel</span>
+                </a>
+                <a href="visualizations.html" class="nav-link">
+                    <i class="fas fa-images"></i>
+                    <span>My Gallery</span>
+                </a>
+            </div>
+            
+            <div class="nav-toggle" id="nav-toggle">
+                <i class="fas fa-bars"></i>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Success Content -->
+    <main class="success-container">
+        <div class="success-card">
+            <div class="success-icon">
+                <i class="fas fa-check"></i>
+            </div>
+            
+            <h1 class="success-title">Booking Confirmed!</h1>
+            <p class="success-subtitle">
+                Your travel booking has been successfully confirmed. We've sent a confirmation email with all the details.
+            </p>
+            
+            <div class="booking-details">
+                <h3>Booking Details</h3>
+                <div class="booking-id">
+                    <div class="booking-id-label">Booking ID</div>
+                    <div class="booking-id-value" id="booking-id">BK12345678</div>
+                </div>
+                
+                <div id="booking-info">
+                    <!-- Booking details will be populated by JavaScript -->
+                </div>
+            </div>
+            
+            <div class="next-steps">
+                <h4><i class="fas fa-list-check"></i> What's Next?</h4>
+                <ul>
+                    <li>Check your email for the booking confirmation</li>
+                    <li>Review your booking details and itinerary</li>
+                    <li>Contact us if you need any changes or have questions</li>
+                    <li>Prepare for your amazing trip!</li>
+                </ul>
+            </div>
+            
+            <div class="action-buttons">
+                <a href="booking.html" class="btn btn-secondary">
+                    <i class="fas fa-plus"></i>
+                    Book Another Trip
+                </a>
+                <a href="index.html" class="btn btn-primary">
+                    <i class="fas fa-home"></i>
+                    Go Home
+                </a>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-logo">
+                <div class="footer-logo-icon">
+                    <i class="fas fa-magic"></i>
+                </div>
+                <div class="footer-logo-text">
+                    <span>AI Travel</span>
+                    <div>Visualize Your Dreams</div>
+                </div>
+            </div>
+            <div class="footer-copyright">
+                © 2024 AI Travel. All rights reserved.
+            </div>
+        </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="js/api.js"></script>
+    <script src="js/ui.js"></script>
+    <script>
+        // Create confetti effect
+        function createConfetti() {
+            const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#feca57', '#ff9ff3'];
+            
+            for (let i = 0; i < 50; i++) {
+                const confetti = document.createElement('div');
+                confetti.className = 'confetti';
+                confetti.style.left = Math.random() * 100 + 'vw';
+                confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+                confetti.style.animationDelay = Math.random() * 3 + 's';
+                confetti.style.animationDuration = (Math.random() * 3 + 2) + 's';
+                document.body.appendChild(confetti);
+                
+                // Remove confetti after animation
+                setTimeout(() => {
+                    if (confetti.parentNode) {
+                        confetti.remove();
+                    }
+                }, 5000);
+            }
+        }
+        
+        // Get booking details from URL parameters
+        function getBookingDetails() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const bookingId = urlParams.get('booking_id');
+            const bookingData = urlParams.get('booking_data');
+            
+            if (bookingId) {
+                document.getElementById('booking-id').textContent = bookingId;
+            }
+            
+            if (bookingData) {
+                try {
+                    const booking = JSON.parse(decodeURIComponent(bookingData));
+                    displayBookingInfo(booking);
+                } catch (error) {
+                    console.error('Error parsing booking data:', error);
+                }
+            }
+        }
+        
+        // Display booking information
+        function displayBookingInfo(booking) {
+            const bookingInfo = document.getElementById('booking-info');
+            
+            const infoHTML = `
+                <div style="margin-top: 16px;">
+                    <p><strong>Customer:</strong> ${booking.customer_name}</p>
+                    <p><strong>Email:</strong> ${booking.customer_email}</p>
+                    <p><strong>Travel Date:</strong> ${new Date(booking.travel_date).toLocaleDateString()}</p>
+                    ${booking.return_date ? `<p><strong>Return Date:</strong> ${new Date(booking.return_date).toLocaleDateString()}</p>` : ''}
+                    <p><strong>Passengers:</strong> ${booking.passengers}</p>
+                    <p><strong>Total Price:</strong> $${booking.total_price} ${booking.currency}</p>
+                    ${booking.special_requests ? `<p><strong>Special Requests:</strong> ${booking.special_requests}</p>` : ''}
+                </div>
+            `;
+            
+            bookingInfo.innerHTML = infoHTML;
+        }
+        
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            // Create confetti effect
+            createConfetti();
+            
+            // Get and display booking details
+            getBookingDetails();
+            
+            // Mobile navigation toggle
+            const navToggle = document.getElementById('nav-toggle');
+            const navMenu = document.getElementById('nav-menu');
+            
+            if (navToggle && navMenu) {
+                navToggle.addEventListener('click', () => {
+                    navMenu.classList.toggle('active');
+                });
+            }
+        });
+    </script>
+</body>
+</html> 
