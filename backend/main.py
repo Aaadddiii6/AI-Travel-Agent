@@ -82,13 +82,20 @@ app = FastAPI(
 )
 
 # Serve static files (for generated images)
-app.mount("/static", StaticFiles(directory="backend/static"), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Enhanced CORS for production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for development
-    allow_credentials=False,  # Set to False when using allow_origins=["*"]
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8000", 
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8000",
+        "https://your-frontend-domain.onrender.com",  # Replace with your actual frontend domain
+        "https://your-app-name.onrender.com"  # Replace with your actual app domain
+    ] if os.getenv("RENDER", "false").lower() == "true" else ["*"],
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"]
@@ -1172,13 +1179,13 @@ async def generate_visualization(
             if hf_result and isinstance(hf_result, list) and len(hf_result) > 0 and isinstance(hf_result[0], dict) and 'image' in hf_result[0]:
                 # Upload the image to a public location or serve it from backend
                 # For now, return the local file path (not ideal for production)
-                result_url = f"/static/generated/{os.path.basename(hf_result[0]['image'])}"
+                result_url = f"/static/uploads/{os.path.basename(hf_result[0]['image'])}"
                 # Optionally, move/copy the file to a static directory
                 import shutil
-                static_dir = os.path.join(os.path.dirname(__file__), "static", "generated")
+                static_dir = os.path.join(os.path.dirname(__file__), "static", "uploads")
                 os.makedirs(static_dir, exist_ok=True)
                 shutil.copy(hf_result[0]['image'], os.path.join(static_dir, os.path.basename(hf_result[0]['image'])))
-                result_url = f"/static/generated/{os.path.basename(hf_result[0]['image'])}"
+                result_url = f"/static/uploads/{os.path.basename(hf_result[0]['image'])}"
             else:
                 raise Exception("No image returned from Hugging Face Space")
         except Exception as e:
@@ -2106,6 +2113,80 @@ Return as JSON array with these exact fields:
             detail=f"Failed to search bookings: {str(e)}"
         )
 
+def get_mock_flight_results(origin: str, destination: str):
+    """Generate mock flight results for fallback"""
+    import random
+    from datetime import datetime, timedelta
+    
+    airlines = ["American Airlines", "Delta", "United", "Southwest", "JetBlue", "Alaska Airlines"]
+    flight_numbers = [f"{random.choice(['AA', 'DL', 'UA', 'WN', 'B6', 'AS'])}{random.randint(1000, 9999)}" for _ in range(6)]
+    
+    flights = []
+    for i in range(6):
+        # Generate random departure time
+        departure_hour = random.randint(6, 22)
+        departure_minute = random.choice([0, 15, 30, 45])
+        departure_time = datetime.now().replace(hour=departure_hour, minute=departure_minute, second=0, microsecond=0)
+        
+        # Flight duration between 1-8 hours
+        duration_hours = random.randint(1, 8)
+        duration_minutes = random.randint(0, 59)
+        arrival_time = departure_time + timedelta(hours=duration_hours, minutes=duration_minutes)
+        
+        # Price between $200-$1500
+        base_price = random.randint(200, 1500)
+        price = base_price + (i * 50)  # Slight price variation
+        
+        flight = {
+            "id": f"mock_flight_{i+1}",
+            "price": {
+                "total": str(price),
+                "currency": "USD"
+            },
+            "itineraries": [{
+                "segments": [{
+                    "departure": {
+                        "iataCode": origin,
+                        "terminal": str(random.randint(1, 5)),
+                        "at": departure_time.strftime("%Y-%m-%dT%H:%M:%S")
+                    },
+                    "arrival": {
+                        "iataCode": destination,
+                        "terminal": str(random.randint(1, 5)),
+                        "at": arrival_time.strftime("%Y-%m-%dT%H:%M:%S")
+                    },
+                    "carrierCode": flight_numbers[i][:2],
+                    "number": flight_numbers[i][2:],
+                    "aircraft": {
+                        "code": random.choice(["738", "739", "320", "321", "777", "787"])
+                    },
+                    "operating": {
+                        "carrierCode": flight_numbers[i][:2]
+                    },
+                    "duration": f"PT{duration_hours}H{duration_minutes}M",
+                    "id": f"segment_{i+1}",
+                    "numberOfStops": 0,
+                    "blacklistedInEU": False
+                }]
+            }],
+            "numberOfBookableSeats": random.randint(1, 50),
+            "travelerPricings": [{
+                "travelerId": "1",
+                "fareOption": "STANDARD",
+                "pricingOptions": {
+                    "fareType": ["PUBLISHED"]
+                },
+                "price": {
+                    "currency": "USD",
+                    "total": str(price),
+                    "base": str(int(price * 0.8))
+                }
+            }]
+        }
+        flights.append(flight)
+    
+    return flights
+
 def get_mock_hotel_results(city_code: str):
     """Generate mock hotel data for a specific city"""
     hotel_chains = ["Marriott", "Hilton", "Hyatt", "InterContinental", "Four Seasons", "Ritz-Carlton", "W Hotels", "Sheraton", "Westin", "Renaissance"]
@@ -2268,103 +2349,128 @@ async def search_flights(
     """
     Search for flights using Amadeus API
     """
-    logger.info(f"Flight search request received: {data}")
     try:
         # Rate limiting
         client_ip = get_client_ip(request)
         check_rate_limit(client_ip)
         
-        # Log the received data for debugging
-        logger.info(f"Received flight search data: origin='{data.origin}', destination='{data.destination}', departure_date='{data.departure_date}'")
+        # Log the incoming request for debugging
+        logger.info(f"Flight search request: {data}")
         
         if not amadeus_client:
-            # Return mock data instead of error for testing
             logger.warning("Amadeus client not available, returning mock data")
-            mock_flights = [
-                {
-                    "id": "mock_1",
-                    "price": {"total": "450.00", "currency": "USD"},
-                    "itineraries": [{"segments": [{"departure": {"iataCode": data.origin}, "arrival": {"iataCode": data.destination}}]}],
-                    "numberOfBookableSeats": "4",
-                    "travelerPricings": [{"price": {"total": "450.00"}}]
-                },
-                {
-                    "id": "mock_2", 
-                    "price": {"total": "520.00", "currency": "USD"},
-                    "itineraries": [{"segments": [{"departure": {"iataCode": data.origin}, "arrival": {"iataCode": data.destination}}]}],
-                    "numberOfBookableSeats": "2",
-                    "travelerPricings": [{"price": {"total": "520.00"}}]
-                }
-            ]
             return {
                 "success": True,
-                "flights": mock_flights,
-                "count": len(mock_flights),
-                "note": "Mock data (Amadeus not available)"
+                "flights": get_mock_flight_results(data.origin, data.destination),
+                "count": 6,
+                "provider": "Mock Data (Amadeus unavailable)"
+            }
+        
+        # Validate airport codes (basic validation)
+        if len(data.origin) != 3 or len(data.destination) != 3:
+            logger.warning(f"Invalid airport codes: {data.origin} -> {data.destination}")
+            return {
+                "success": True,
+                "flights": get_mock_flight_results(data.origin, data.destination),
+                "count": 6,
+                "provider": "Mock Data (Invalid airport codes)"
+            }
+        
+        # Validate dates
+        try:
+            from datetime import datetime
+            departure_date = datetime.strptime(data.departure_date, "%Y-%m-%d")
+            if data.return_date:
+                return_date = datetime.strptime(data.return_date, "%Y-%m-%d")
+                if return_date <= departure_date:
+                    logger.warning("Return date must be after departure date")
+                    return {
+                        "success": True,
+                        "flights": get_mock_flight_results(data.origin, data.destination),
+                        "count": 6,
+                        "provider": "Mock Data (Invalid dates)"
+                    }
+        except ValueError as e:
+            logger.warning(f"Invalid date format: {e}")
+            return {
+                "success": True,
+                "flights": get_mock_flight_results(data.origin, data.destination),
+                "count": 6,
+                "provider": "Mock Data (Invalid date format)"
             }
         
         # Search for flights
-        if data.return_date:
-            # Round trip
-            response = amadeus_client.shopping.flight_offers_search.get(
-                originLocationCode=data.origin,
-                destinationLocationCode=data.destination,
-                departureDate=data.departure_date,
-                returnDate=data.return_date,
-                adults=data.adults,
-                children=data.children,
-                infants=data.infants,
-                travelClass=data.travel_class,
-                currencyCode=data.currency_code,
-                max=50
-            )
-        else:
-            # One way
-            response = amadeus_client.shopping.flight_offers_search.get(
-                originLocationCode=data.origin,
-                destinationLocationCode=data.destination,
-                departureDate=data.departure_date,
-                adults=data.adults,
-                children=data.children,
-                infants=data.infants,
-                travelClass=data.travel_class,
-                currencyCode=data.currency_code,
-                max=50
-            )
-        
-        # Process and format the response
-        flights = []
-        for offer in response.data:
-            flight = {
-                "id": offer['id'],
-                "price": {
-                    "total": offer['price']['total'],
-                    "currency": offer['price']['currency']
-                },
-                "itineraries": offer['itineraries'],
-                "numberOfBookableSeats": offer.get('numberOfBookableSeats', 'N/A'),
-                "travelerPricings": offer['travelerPricings']
+        try:
+            if data.return_date:
+                # Round trip
+                response = amadeus_client.shopping.flight_offers_search.get(
+                    originLocationCode=data.origin,
+                    destinationLocationCode=data.destination,
+                    departureDate=data.departure_date,
+                    returnDate=data.return_date,
+                    adults=data.adults,
+                    children=data.children,
+                    infants=data.infants,
+                    travelClass=data.travel_class,
+                    currencyCode=data.currency_code,
+                    max=50
+                )
+            else:
+                # One way
+                response = amadeus_client.shopping.flight_offers_search.get(
+                    originLocationCode=data.origin,
+                    destinationLocationCode=data.destination,
+                    departureDate=data.departure_date,
+                    adults=data.adults,
+                    children=data.children,
+                    infants=data.infants,
+                    travelClass=data.travel_class,
+                    currencyCode=data.currency_code,
+                    max=50
+                )
+            
+            # Process and format the response
+            flights = []
+            for offer in response.data:
+                flight = {
+                    "id": offer['id'],
+                    "price": {
+                        "total": offer['price']['total'],
+                        "currency": offer['price']['currency']
+                    },
+                    "itineraries": offer['itineraries'],
+                    "numberOfBookableSeats": offer.get('numberOfBookableSeats', 'N/A'),
+                    "travelerPricings": offer['travelerPricings']
+                }
+                flights.append(flight)
+            
+            logger.info(f"Found {len(flights)} flights from Amadeus API")
+            return {
+                "success": True,
+                "flights": flights,
+                "count": len(flights),
+                "provider": "Amadeus API"
             }
-            flights.append(flight)
+            
+        except ResponseError as e:
+            logger.error(f"Amadeus API error: {e}")
+            # Return mock data instead of throwing an error
+            return {
+                "success": True,
+                "flights": get_mock_flight_results(data.origin, data.destination),
+                "count": 6,
+                "provider": "Mock Data (Amadeus API error)"
+            }
         
-        return {
-            "success": True,
-            "flights": flights,
-            "count": len(flights)
-        }
-        
-    except ResponseError as e:
-        logger.error(f"Amadeus API error: {e}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Flight search error: {str(e)}"
-        )
     except Exception as e:
         logger.error(f"Flight search error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Internal server error during flight search"
-        )
+        # Return mock data instead of throwing an error
+        return {
+            "success": True,
+            "flights": get_mock_flight_results(data.origin, data.destination),
+            "count": 6,
+            "provider": "Mock Data (Server error)"
+        }
 
 @app.post("/api/search-hotels")
 async def search_hotels(
@@ -2519,10 +2625,11 @@ def generate_ai_image(selfie_path: Path, prompt: str) -> list[str]:
         image_urls = []
         uploads_dir = Path(__file__).parent / "static" / "uploads"
         uploads_dir.mkdir(exist_ok=True)
+        timestamp = int(time.time())
         for i, item in enumerate(result):
             if item and isinstance(item, dict) and "image" in item and item["image"]:
                 image_path = item["image"]
-                dest_filename = f"generated_{i+1}_{os.path.basename(image_path)}"
+                dest_filename = f"generated_{i+1}_{timestamp}_{os.path.basename(image_path)}"
                 dest_path = uploads_dir / dest_filename
                 shutil.copy(image_path, dest_path)
                 image_urls.append(f"/static/uploads/{dest_filename}")
