@@ -1,6 +1,15 @@
 # AI Travel Agent
 
-An AI-powered travel visualization application that lets you see yourself in amazing destinations around the world, with intelligent recommendations and booking capabilities.
+An AI-powered travel booking and visualization application that lets you search for flights and hotels, see yourself in amazing destinations around the world, and get intelligent travel recommendations with booking capabilities.
+
+## 🎯 **NEW: Flight & Hotel Booking Now Live!**
+
+- ✅ **Flight Search**: Real-time flight search using Amadeus API
+- ✅ **Hotel Search**: Hotel booking with intelligent fallback data
+- ✅ **AI Photo Generation**: See yourself in travel destinations
+- ✅ **Smart Recommendations**: AI-powered travel suggestions
+- ✅ **Complete Booking System**: End-to-end booking flow
+- ✅ **Production Ready**: Fully deployable to Render
 
 ## 🌐 Live Demo
 
@@ -67,10 +76,12 @@ Frontend will be available at: http://localhost:3000
 ### Frontend
 
 - ✅ Modern, responsive UI with Tailwind CSS
-- ✅ Drag & drop photo upload with face swap technology
+- ✅ **Flight & Hotel Search**: Real-time search with autocomplete
+- ✅ **Booking System**: Complete booking flow for flights and hotels
+- ✅ Drag & drop photo upload with AI face swap technology
 - ✅ Destination browsing with search and filters
 - ✅ AI-powered travel recommendations
-- ✅ Interactive booking system
+- ✅ Interactive booking system with dual currency display
 - ✅ Visualization gallery with before/after comparisons
 - ✅ Toast notifications and loading states
 - ✅ Mobile-friendly design
@@ -79,13 +90,16 @@ Frontend will be available at: http://localhost:3000
 ### Backend
 
 - ✅ FastAPI REST API with comprehensive endpoints
-- ✅ Photo upload and face swap processing
+- ✅ **Amadeus API Integration**: Real-time flight and hotel search
+- ✅ **Intelligent Fallbacks**: Graceful degradation when APIs fail
+- ✅ Photo upload and AI image generation processing
 - ✅ Destination data management with Supabase
 - ✅ OpenAI integration for intelligent recommendations
 - ✅ Booking system with data persistence
 - ✅ CORS support for cross-origin requests
 - ✅ Health check and debug endpoints
 - ✅ Environment-based configuration
+- ✅ **Production Ready**: Optimized for Render deployment
 
 ## 🛠️ Technology Stack
 
@@ -99,12 +113,15 @@ Frontend will be available at: http://localhost:3000
 
 ### Backend
 
-- Python 3.10+
+- Python 3.11+
 - FastAPI framework
 - Uvicorn ASGI server
+- **Amadeus API** for flight and hotel search
 - OpenAI API integration (DALL-E for image generation)
+- Hugging Face API for AI image generation
 - Supabase database (PostgreSQL)
 - Pillow for image processing
+- **Production deployment** with Render
 
 ## 📁 Project Structure
 
@@ -173,6 +190,10 @@ Travel-Agent/
    # Face Swap API Key
    FACE_SWAP_API_KEY=your_face_swap_api_key_here
 
+   # Amadeus API Configuration
+   AMADEUS_CLIENT_ID=your_amadeus_client_id_here
+   AMADEUS_CLIENT_SECRET=your_amadeus_client_secret_here
+
    # API Configuration
    API_HOST=127.0.0.1
    API_PORT=8000
@@ -192,8 +213,11 @@ Set these environment variables in your Render dashboard:
 - `SUPABASE_KEY`: Your Supabase anon/public key
 - `OPENAI_API_KEY`: Your OpenAI API key
 - `HUGGINGFACE_TOKEN`: Your Hugging Face token
+- `AMADEUS_CLIENT_ID`: Your Amadeus API client ID
+- `AMADEUS_CLIENT_SECRET`: Your Amadeus API client secret
 - `LIGHTX_API_KEY`: Your LightX API key
 - `FACE_SWAP_API_KEY`: Your Face Swap API key
+- `RENDER`: true (for production CORS)
 - `API_HOST`: 0.0.0.0 (for Render)
 - `API_PORT`: 10000 (Render's default port)
 - `DEBUG`: False
@@ -231,6 +255,16 @@ Visit http://localhost:5000/test-data.html to test:
 - Visualizations data loading
 - Supabase connection status
 
+### Flight & Hotel Booking Testing
+
+Visit http://localhost:5000/booking.html to test:
+
+- Flight search with real-time results
+- Hotel search with fallback data
+- Booking system functionality
+- Dual currency display (USD/INR)
+- Autocomplete for airports and cities
+
 ### API Documentation
 
 Visit http://localhost:8000/docs for interactive API documentation.
@@ -239,6 +273,7 @@ Visit http://localhost:8000/docs for interactive API documentation.
 
 - Health check: `GET /health`
 - Debug info: `GET /debug`
+- Hotel endpoint test: `GET /api/test-hotels`
 - Environment check: `GET /env-check`
 
 ## 🐛 Troubleshooting
@@ -248,31 +283,43 @@ Visit http://localhost:8000/docs for interactive API documentation.
 1. **Port already in use**
 
    - Backend: Change port in `backend/main.py`
+
+2. **Flight/Hotel Search Issues**
+
+   - Ensure Amadeus API credentials are set correctly
+   - Check that city codes are valid (e.g., "DEL" for Delhi, "NYC" for New York)
+   - Hotel search may show fallback data for unavailable properties (this is normal)
+
+3. **Image Generation Issues**
+
+   - Ensure Hugging Face token is valid
+   - Check that static directory exists: `backend/backend/static/uploads/`
+   - Images are generated with unique timestamps to prevent caching issues
    - Frontend: Use different port: `python3 -m http.server 5001`
 
-2. **Dependencies not found**
+4. **Dependencies not found**
 
    - Run: `pip install -r backend/requirements.txt`
 
-3. **Backend not starting**
+5. **Backend not starting**
 
    - Check if virtual environment is activated
    - Verify all dependencies are installed
    - Check console for error messages
 
-4. **Frontend not loading data**
+6. **Frontend not loading data**
 
    - Ensure backend is running on port 8000
    - Check browser console for CORS errors
    - Verify API endpoints are accessible
 
-5. **Supabase connection issues**
+7. **Supabase connection issues**
 
    - Verify environment variables are set correctly
    - Check Supabase project status
    - Ensure database tables exist
 
-6. **Render deployment issues**
+8. **Render deployment issues**
    - Verify environment variables in Render dashboard
    - Check build logs for dependency issues
    - Ensure proper port configuration (10000 for Render)
@@ -308,17 +355,34 @@ To run in debug mode, set `DEBUG=True` in your `.env` file.
 
 ## 🚀 Deployment
 
-The application is configured for deployment on Render:
+The project is fully optimized for Render deployment with complete configuration files:
+
+### Automatic Deployment (Recommended)
+
+1. **Push to GitHub**
+2. **Connect repository to Render**
+3. **Use the provided `render.yaml` configuration**
+4. **Set environment variables in Render dashboard**
+
+### Manual Configuration
 
 1. **Backend**: Deploy as a Python service
 
-   - Build Command: `pip install -r requirements.txt`
-   - Start Command: `python main.py`
+   - Build Command: `pip install -r backend/requirements.txt`
+   - Start Command: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - Environment: Python 3.11
    - Port: 10000
 
 2. **Frontend**: Deploy as a static site
    - Build Command: None required
    - Publish Directory: `frontend/`
+
+### Deployment Files Included
+
+- `render.yaml` - Render deployment configuration
+- `Dockerfile` - Container deployment option
+- `DEPLOYMENT.md` - Complete deployment guide
+- `backend/start.sh` - Startup script
 
 ### Environment Variables
 
