@@ -447,6 +447,32 @@ document.addEventListener("DOMContentLoaded", function () {
 
         // Debug: Log the search data
         console.log("Flight search data:", searchData);
+        console.log(
+          "Flight search data JSON:",
+          JSON.stringify(searchData, null, 2)
+        );
+
+        // Validate required fields before sending request
+        if (!searchData.origin || searchData.origin.length < 2) {
+          showToast(
+            "Please enter a valid departure airport code (e.g., JFK, LAX)",
+            "error"
+          );
+          return;
+        }
+
+        if (!searchData.destination || searchData.destination.length < 2) {
+          showToast(
+            "Please enter a valid destination airport code (e.g., JFK, LAX)",
+            "error"
+          );
+          return;
+        }
+
+        if (!searchData.departure_date) {
+          showToast("Please select a departure date", "error");
+          return;
+        }
 
         const response = await fetch(
           "http://localhost:8000/api/search-flights",
@@ -460,7 +486,17 @@ document.addEventListener("DOMContentLoaded", function () {
         );
 
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          // Try to get the error details from the response
+          let errorMessage = `HTTP error! status: ${response.status}`;
+          try {
+            const errorData = await response.json();
+            if (errorData.detail) {
+              errorMessage = errorData.detail;
+            }
+          } catch (e) {
+            // If we can't parse the error response, use the default message
+          }
+          throw new Error(errorMessage);
         }
 
         data = await response.json();

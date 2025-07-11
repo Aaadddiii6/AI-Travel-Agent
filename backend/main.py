@@ -82,24 +82,13 @@ app = FastAPI(
 )
 
 # Serve static files (for generated images)
-import os
-static_dir = "backend/static"
-if not os.path.exists(static_dir):
-    os.makedirs(static_dir, exist_ok=True)
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+app.mount("/static", StaticFiles(directory="backend/static"), name="static")
 
 # Enhanced CORS for production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:8000", 
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:8000",
-        "https://your-frontend-domain.onrender.com",  # Replace with your actual frontend domain
-        "https://your-app-name.onrender.com"  # Replace with your actual app domain
-    ] if os.getenv("RENDER", "false").lower() == "true" else ["*"],
-    allow_credentials=False,
+    allow_origins=["*"],  # Allow all origins for development
+    allow_credentials=False,  # Set to False when using allow_origins=["*"]
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["*"]
@@ -1819,7 +1808,12 @@ Focus on popular, well-known destinations that travelers would actually search f
                 temperature=0.7
             )
             
-            content = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            if content:
+                content = content.strip()
+            else:
+                logger.warning("OpenAI returned empty content")
+                return {"suggestions": []}
             
             # Parse JSON response
             import json
@@ -2078,7 +2072,12 @@ Return as JSON array with these exact fields:
                 temperature=0.7
             )
             
-            content = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            if content:
+                content = content.strip()
+            else:
+                logger.warning("OpenAI returned empty content")
+                return {"results": [], "provider": "fallback"}
             
             # Parse JSON response
             import json
@@ -2269,16 +2268,40 @@ async def search_flights(
     """
     Search for flights using Amadeus API
     """
+    logger.info(f"Flight search request received: {data}")
     try:
         # Rate limiting
         client_ip = get_client_ip(request)
         check_rate_limit(client_ip)
         
+        # Log the received data for debugging
+        logger.info(f"Received flight search data: origin='{data.origin}', destination='{data.destination}', departure_date='{data.departure_date}'")
+        
         if not amadeus_client:
-            raise HTTPException(
-                status_code=503,
-                detail="Flight search service is currently unavailable"
-            )
+            # Return mock data instead of error for testing
+            logger.warning("Amadeus client not available, returning mock data")
+            mock_flights = [
+                {
+                    "id": "mock_1",
+                    "price": {"total": "450.00", "currency": "USD"},
+                    "itineraries": [{"segments": [{"departure": {"iataCode": data.origin}, "arrival": {"iataCode": data.destination}}]}],
+                    "numberOfBookableSeats": "4",
+                    "travelerPricings": [{"price": {"total": "450.00"}}]
+                },
+                {
+                    "id": "mock_2", 
+                    "price": {"total": "520.00", "currency": "USD"},
+                    "itineraries": [{"segments": [{"departure": {"iataCode": data.origin}, "arrival": {"iataCode": data.destination}}]}],
+                    "numberOfBookableSeats": "2",
+                    "travelerPricings": [{"price": {"total": "520.00"}}]
+                }
+            ]
+            return {
+                "success": True,
+                "flights": mock_flights,
+                "count": len(mock_flights),
+                "note": "Mock data (Amadeus not available)"
+            }
         
         # Search for flights
         if data.return_date:
@@ -2494,13 +2517,12 @@ def generate_ai_image(selfie_path: Path, prompt: str) -> list[str]:
         if not result or not isinstance(result, list) or len(result) == 0:
             raise ValueError("Unexpected response structure from Hugging Face")
         image_urls = []
-        uploads_dir = Path(__file__).parent / "backend" / "static" / "uploads"
+        uploads_dir = Path(__file__).parent / "static" / "uploads"
         uploads_dir.mkdir(exist_ok=True)
-        timestamp = int(time.time())
         for i, item in enumerate(result):
             if item and isinstance(item, dict) and "image" in item and item["image"]:
                 image_path = item["image"]
-                dest_filename = f"generated_{i+1}_{timestamp}_{os.path.basename(image_path)}"
+                dest_filename = f"generated_{i+1}_{os.path.basename(image_path)}"
                 dest_path = uploads_dir / dest_filename
                 shutil.copy(image_path, dest_path)
                 image_urls.append(f"/static/uploads/{dest_filename}")
@@ -2555,8 +2577,11 @@ def generate_dalle_images(prompt: str) -> list[str]:
         
         if response.data and len(response.data) > 0:
             image_url = response.data[0].url
+            if not image_url:
+                raise Exception("DALL-E API returned no valid image URL")
+            
             # Download and save the image
-            uploads_dir = Path(__file__).parent / "backend" / "static" / "uploads"
+            uploads_dir = Path(__file__).parent / "static" / "uploads"
             uploads_dir.mkdir(exist_ok=True)
             
             # Download the image
@@ -2594,7 +2619,7 @@ def generate_mock_images(prompt: str) -> list[str]:
         ]
         
         # Download and save mock images
-        uploads_dir = Path(__file__).parent / "backend" / "static" / "uploads"
+        uploads_dir = Path(__file__).parent / "static" / "uploads"
         uploads_dir.mkdir(exist_ok=True)
         
         image_urls = []
@@ -2633,7 +2658,7 @@ async def generate_photo_app_image(
     prompt: str = Form(...)
 ):
     try:
-        uploads_dir = Path(__file__).parent / "backend" / "static" / "uploads"
+        uploads_dir = Path(__file__).parent / "static" / "uploads"
         uploads_dir.mkdir(exist_ok=True)
         filename = selfie.filename or "uploaded.jpg"
         upload_path = uploads_dir / filename
