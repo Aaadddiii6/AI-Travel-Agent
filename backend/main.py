@@ -20,7 +20,7 @@ from gradio_client import Client as GradioClient, handle_file
 from pathlib import Path
 import shutil
 from fastapi.staticfiles import StaticFiles
-# Load environment variables
+from amadeus import Client as AmadeusClient, ResponseError# Load environment variables
 load_dotenv()
 
 # Configure OpenAI
@@ -109,7 +109,22 @@ except Exception as e:
     logger.error(f"Failed to initialize Supabase client: {e}")
     supabase = None
 
-# Face swap functionality removed - using OpenAI/DALL-E for image generation
+# Initialize Amadeus client
+amadeus_client = None
+try:
+    amadeus_client_id = os.getenv("AMADEUS_CLIENT_ID")
+    amadeus_client_secret = os.getenv("AMADEUS_CLIENT_SECRET")
+    if amadeus_client_id and amadeus_client_secret:
+        amadeus_client = AmadeusClient(
+            client_id=amadeus_client_id,
+            client_secret=amadeus_client_secret
+        )
+        logger.info("Amadeus client initialized successfully")
+    else:
+        logger.warning("Amadeus credentials not found")
+except Exception as e:
+    logger.error(f"Failed to initialize Amadeus client: {e}")
+    amadeus_client = None
 
 # Pydantic models for validation
 class VisualizationRequest(BaseModel):
@@ -320,6 +335,114 @@ class ErrorResponse(BaseModel):
     detail: str
     error_code: Optional[str] = None
     timestamp: str
+
+class FlightSearchRequest(BaseModel):
+    origin: str
+    destination: str
+    departure_date: str
+    return_date: Optional[str] = None
+    adults: int = 1
+    children: int = 0
+    infants: int = 0
+    travel_class: str = "ECONOMY"
+    currency_code: str = "USD"
+    
+    @field_validator('origin')
+    @classmethod
+    def validate_origin(cls, v):
+        if not v or len(v.strip()) < 2:
+            raise ValueError('Origin must be at least 2 characters')
+        return v.strip().upper()
+    
+    @field_validator('destination')
+    @classmethod
+    def validate_destination(cls, v):
+        if not v or len(v.strip()) < 2:
+            raise ValueError('Destination must be at least 2 characters')
+        return v.strip().upper()
+    
+    @field_validator('departure_date')
+    @classmethod
+    def validate_departure_date(cls, v):
+        from datetime import datetime
+        try:
+            datetime.strptime(v, '%Y-%m-%d')
+        except ValueError:
+            raise ValueError('Departure date must be in YYYY-MM-DD format')
+        return v
+    
+    @field_validator('return_date')
+    @classmethod
+    def validate_return_date(cls, v, info):
+        if v:
+            from datetime import datetime
+            try:
+                return_date = datetime.strptime(v, '%Y-%m-%d')
+                departure_date = datetime.strptime(info.data['departure_date'], '%Y-%m-%d')
+                if return_date <= departure_date:
+                    raise ValueError('Return date must be after departure date')
+            except ValueError as e:
+                if 'Return date' in str(e):
+                    raise e
+                raise ValueError('Return date must be in YYYY-MM-DD format')
+        return v
+
+class HotelSearchRequest(BaseModel):
+    city_code: str
+    check_in_date: str
+    check_out_date: str
+    adults: int = 1
+    children: int = 0
+    room_quantity: int = 1
+    currency_code: str = "USD"
+    price_range: Optional[str] = None  # e.g., "50-200"
+    ratings: Optional[str] = None  # e.g., "3,4,5"
+    
+    @field_validator('city_code')
+    @classmethod
+    def validate_city_code(cls, v):
+        if not v or len(v.strip()) < 2:
+            raise ValueError('City code must be at least 2 characters')
+        return v.strip().upper()
+    
+    @field_validator('check_in_date')
+    @classmethod
+    def validate_check_in_date(cls, v):
+        from datetime import datetime
+        try:
+            datetime.strptime(v, '%Y-%m-%d')
+        except ValueError:
+            raise ValueError('Check-in date must be in YYYY-MM-DD format')
+        return v
+    
+    @field_validator('check_out_date')
+    @classmethod
+    def validate_check_out_date(cls, v, info):
+        from datetime import datetime
+        try:
+            check_out_date = datetime.strptime(v, '%Y-%m-%d')
+            check_in_date = datetime.strptime(info.data['check_in_date'], '%Y-%m-%d')
+            if check_out_date <= check_in_date:
+                raise ValueError('Check-out date must be after check-in date')
+        except ValueError as e:
+            if 'Check-out date' in str(e):
+                raise e
+            raise ValueError('Check-out date must be in YYYY-MM-DD format')
+        return v
+    
+    @field_validator('adults')
+    @classmethod
+    def validate_adults(cls, v):
+        if v < 1 or v > 9:
+            raise ValueError('Number of adults must be between 1 and 9')
+        return v
+    
+    @field_validator('room_quantity')
+    @classmethod
+    def validate_room_quantity(cls, v):
+        if v < 1 or v > 9:
+            raise ValueError('Number of rooms must be between 1 and 9')
+        return v
 
 # Rate limiting (simple in-memory implementation)
 from collections import defaultdict
@@ -534,6 +657,14 @@ async def health_check():
         health_status["details"]["supabase_error"] = "Supabase client not initialized"
     
     return health_status
+
+@app.get("/api/test-hotels")
+async def test_hotels():
+    """Test endpoint for hotel search"""
+    return {
+        "message": "Hotel search endpoint is working",
+        "timestamp": datetime.now().isoformat()
+    }
 
 @app.get("/temp-image/{image_id}")
 async def get_temp_image(image_id: str):
@@ -1965,6 +2096,37 @@ Return as JSON array with these exact fields:
             detail=f"Failed to search bookings: {str(e)}"
         )
 
+def get_mock_hotel_results(city_code: str):
+    """Generate mock hotel data for a specific city"""
+    hotel_chains = ["Marriott", "Hilton", "Hyatt", "InterContinental", "Four Seasons", "Ritz-Carlton", "W Hotels", "Sheraton", "Westin", "Renaissance"]
+    amenities = [["WiFi", "Pool", "Spa"], ["WiFi", "Gym", "Restaurant"], ["WiFi", "Pool", "Gym", "Spa"], ["WiFi", "Restaurant", "Bar"], ["WiFi", "Pool", "Gym", "Restaurant", "Spa"]]
+    
+    hotels = []
+    for i in range(6):
+        base_price = 150 + (i * 75)
+        hotels.append({
+            "id": f"mock_hotel_{i+1}",
+            "name": f"{hotel_chains[i % len(hotel_chains)]} {city_code}",
+            "rating": 4.0 + (i * 0.1),
+            "location": {
+                "latitude": 40.7128 + (i * 0.01),
+                "longitude": -74.0060 + (i * 0.01),
+                "address": {
+                    "cityName": city_code,
+                    "countryCode": "US"
+                },
+            },
+            "amenities": amenities[i % len(amenities)],
+            "price": {
+                "total": str(base_price),
+                "currency": "USD"
+            },
+            "room": {"description": "Standard Room"},
+            "boardType": "ROOM_ONLY",
+            "image_url": f"https://images.unsplash.com/photo-{1550000000 + i * 100000}?w=800&h=600&fit=crop&q=80"
+        })
+    return hotels
+
 def get_mock_booking_results(search_type: str, from_location: Optional[str] = None, to_location: Optional[str] = None, passengers: int = 1, class_type: str = "economy"):
     """Generate realistic mock booking data"""
     
@@ -2087,6 +2249,215 @@ async def general_exception_handler(request, exc):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=jsonable_encoder(error_response)
     )
+
+@app.post("/api/search-flights")
+async def search_flights(
+    data: FlightSearchRequest,
+    request: Request
+):
+    """
+    Search for flights using Amadeus API
+    """
+    try:
+        # Rate limiting
+        client_ip = get_client_ip(request)
+        check_rate_limit(client_ip)
+        
+        if not amadeus_client:
+            raise HTTPException(
+                status_code=503,
+                detail="Flight search service is currently unavailable"
+            )
+        
+        # Search for flights
+        if data.return_date:
+            # Round trip
+            response = amadeus_client.shopping.flight_offers_search.get(
+                originLocationCode=data.origin,
+                destinationLocationCode=data.destination,
+                departureDate=data.departure_date,
+                returnDate=data.return_date,
+                adults=data.adults,
+                children=data.children,
+                infants=data.infants,
+                travelClass=data.travel_class,
+                currencyCode=data.currency_code,
+                max=50
+            )
+        else:
+            # One way
+            response = amadeus_client.shopping.flight_offers_search.get(
+                originLocationCode=data.origin,
+                destinationLocationCode=data.destination,
+                departureDate=data.departure_date,
+                adults=data.adults,
+                children=data.children,
+                infants=data.infants,
+                travelClass=data.travel_class,
+                currencyCode=data.currency_code,
+                max=50
+            )
+        
+        # Process and format the response
+        flights = []
+        for offer in response.data:
+            flight = {
+                "id": offer['id'],
+                "price": {
+                    "total": offer['price']['total'],
+                    "currency": offer['price']['currency']
+                },
+                "itineraries": offer['itineraries'],
+                "numberOfBookableSeats": offer.get('numberOfBookableSeats', 'N/A'),
+                "travelerPricings": offer['travelerPricings']
+            }
+            flights.append(flight)
+        
+        return {
+            "success": True,
+            "flights": flights,
+            "count": len(flights)
+        }
+        
+    except ResponseError as e:
+        logger.error(f"Amadeus API error: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Flight search error: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Flight search error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error during flight search"
+        )
+
+@app.post("/api/search-hotels")
+async def search_hotels(
+    data: HotelSearchRequest,
+    request: Request
+):
+    """
+    Search for hotels using Amadeus API
+    """
+    logger.info(f"Hotel search request received: {data}")
+    try:
+        # Rate limiting
+        client_ip = get_client_ip(request)
+        check_rate_limit(client_ip)
+        
+        if not amadeus_client:
+            raise HTTPException(
+                status_code=503,
+                detail="Hotel search service is currently unavailable"
+            )
+        
+        # Search for hotels using the correct Amadeus API method
+        # First, get hotel list for the city
+        hotels_response = amadeus_client.reference_data.locations.hotels.by_city.get(
+            cityCode=data.city_code
+        )
+        
+        if not hotels_response.data or len(hotels_response.data) == 0:
+            # If no hotels found, return mock data
+            logger.warning(f"No hotels found for city code: {data.city_code}")
+            return {
+                "success": True,
+                "hotels": get_mock_hotel_results(data.city_code),
+                "count": 6
+            }
+        
+        # Get hotel offers for the first few hotels
+        hotels = []
+        hotel_count = min(10, len(hotels_response.data))  # Limit to 10 hotels
+        
+        for i, hotel_info in enumerate(hotels_response.data[:hotel_count]):
+            try:
+                # Get hotel offers for this specific hotel
+                offers_response = amadeus_client.shopping.hotel_offers_search.get(
+                    hotelIds=hotel_info['hotelId'],
+                    checkInDate=data.check_in_date,
+                    checkOutDate=data.check_out_date,
+                    adults=data.adults,
+                    children=data.children,
+                    roomQuantity=data.room_quantity,
+                    currencyCode=data.currency_code,
+                    bestRateOnly=True
+                )
+                
+                if offers_response.data and len(offers_response.data) > 0:
+                    offer = offers_response.data[0]
+                    hotel = {
+                        "id": offer['id'],
+                        "name": hotel_info.get('name', 'Hotel'),
+                        "rating": hotel_info.get('rating', 4.0),
+                        "location": {
+                            "latitude": hotel_info.get('geoCode', {}).get('latitude'),
+                            "longitude": hotel_info.get('geoCode', {}).get('longitude'),
+                            "address": {
+                                "cityName": hotel_info.get('address', {}).get('cityName'),
+                                "countryCode": hotel_info.get('address', {}).get('countryCode')
+                            },
+                        },
+                        "amenities": hotel_info.get('amenities', []),
+                        "price": {
+                            "total": offer['offers'][0]['price']['total'],
+                            "currency": offer['offers'][0]['price']['currency']
+                        },
+                        "room": offer['offers'][0]['room'],
+                        "boardType": offer['offers'][0].get('boardType', 'ROOM_ONLY'),
+                        "image_url": f"https://images.unsplash.com/photo-{uuid.uuid4().hex[:8]}?w=800&h=600&fit=crop&q=80"
+                    }
+                    hotels.append(hotel)
+                else:
+                    # Create a hotel entry with mock pricing if no offers available
+                    hotel = {
+                        "id": f"hotel_{hotel_info['hotelId']}",
+                        "name": hotel_info.get('name', 'Hotel'),
+                        "rating": hotel_info.get('rating', 4.0),
+                        "location": {
+                            "latitude": hotel_info.get('geoCode', {}).get('latitude'),
+                            "longitude": hotel_info.get('geoCode', {}).get('longitude'),
+                            "address": {
+                                "cityName": hotel_info.get('address', {}).get('cityName'),
+                                "countryCode": hotel_info.get('address', {}).get('countryCode')
+                            },
+                        },
+                        "amenities": hotel_info.get('amenities', []),
+                        "price": {
+                            "total": str(150 + (i * 50)),  # Mock pricing
+                            "currency": data.currency_code
+                        },
+                        "room": {"description": "Standard Room"},
+                        "boardType": "ROOM_ONLY",
+                        "image_url": f"https://images.unsplash.com/photo-{uuid.uuid4().hex[:8]}?w=800&h=600&fit=crop&q=80"
+                    }
+                    hotels.append(hotel)
+                    
+            except Exception as e:
+                logger.warning(f"Error getting offers for hotel {hotel_info.get('name', 'Unknown')}: {e}")
+                continue
+        
+        # Hotels are already processed in the loop above
+        
+        return {
+            "success": True,
+            "hotels": hotels,
+            "count": len(hotels)
+        }
+        
+    except ResponseError as e:
+        logger.error(f"Amadeus API error: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Hotel search error: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Hotel search error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error during hotel search"
+        )
 
 # --- Begin: AI Photo App Integration ---
 def generate_ai_image(selfie_path: Path, prompt: str) -> list[str]:
