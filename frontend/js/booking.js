@@ -134,7 +134,9 @@ document.addEventListener("DOMContentLoaded", function () {
             try {
               // For flight search, show airport codes
               if (input.id === "flight-from" || input.id === "flight-to") {
-                const airportSuggestions = getAirportSuggestions(query);
+                const airportSuggestions = getAirportSuggestions(query).map(
+                  (a) => a.full || `${a.code} - ${a.name}`
+                );
                 if (airportSuggestions.length > 0) {
                   showSuggestions(input, airportSuggestions);
                 }
@@ -179,104 +181,14 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function getAirportSuggestions(query) {
-    const airports = [
-      {
-        code: "JFK",
-        name: "John F. Kennedy International Airport",
-        city: "New York",
-      },
-      {
-        code: "LAX",
-        name: "Los Angeles International Airport",
-        city: "Los Angeles",
-      },
-      { code: "ORD", name: "O'Hare International Airport", city: "Chicago" },
-      {
-        code: "DFW",
-        name: "Dallas/Fort Worth International Airport",
-        city: "Dallas",
-      },
-      {
-        code: "ATL",
-        name: "Hartsfield-Jackson Atlanta International Airport",
-        city: "Atlanta",
-      },
-      { code: "DEN", name: "Denver International Airport", city: "Denver" },
-      {
-        code: "SFO",
-        name: "San Francisco International Airport",
-        city: "San Francisco",
-      },
-      {
-        code: "LAS",
-        name: "McCarran International Airport",
-        city: "Las Vegas",
-      },
-      { code: "MCO", name: "Orlando International Airport", city: "Orlando" },
-      {
-        code: "CLT",
-        name: "Charlotte Douglas International Airport",
-        city: "Charlotte",
-      },
-      {
-        code: "DEL",
-        name: "Indira Gandhi International Airport",
-        city: "Delhi",
-      },
-      {
-        code: "BOM",
-        name: "Chhatrapati Shivaji Maharaj International Airport",
-        city: "Mumbai",
-      },
-      {
-        code: "BLR",
-        name: "Kempegowda International Airport",
-        city: "Bangalore",
-      },
-      { code: "MAA", name: "Chennai International Airport", city: "Chennai" },
-      {
-        code: "HYD",
-        name: "Rajiv Gandhi International Airport",
-        city: "Hyderabad",
-      },
-      { code: "LHR", name: "Heathrow Airport", city: "London" },
-      { code: "CDG", name: "Charles de Gaulle Airport", city: "Paris" },
-      { code: "FRA", name: "Frankfurt Airport", city: "Frankfurt" },
-      { code: "AMS", name: "Amsterdam Airport Schiphol", city: "Amsterdam" },
-      { code: "NRT", name: "Narita International Airport", city: "Tokyo" },
-      { code: "HND", name: "Haneda Airport", city: "Tokyo" },
-      {
-        code: "PEK",
-        name: "Beijing Capital International Airport",
-        city: "Beijing",
-      },
-      {
-        code: "PVG",
-        name: "Shanghai Pudong International Airport",
-        city: "Shanghai",
-      },
-      { code: "SYD", name: "Sydney Airport", city: "Sydney" },
-      { code: "MEL", name: "Melbourne Airport", city: "Melbourne" },
-      { code: "DXB", name: "Dubai International Airport", city: "Dubai" },
-      { code: "SIN", name: "Singapore Changi Airport", city: "Singapore" },
-      { code: "BKK", name: "Suvarnabhumi Airport", city: "Bangkok" },
-      {
-        code: "KUL",
-        name: "Kuala Lumpur International Airport",
-        city: "Kuala Lumpur",
-      },
-    ];
-
-    const queryLower = query.toLowerCase();
-    return airports
-      .filter(
-        (airport) =>
-          airport.code.toLowerCase().includes(queryLower) ||
-          airport.city.toLowerCase().includes(queryLower) ||
-          airport.name.toLowerCase().includes(queryLower)
-      )
-      .map((airport) => `${airport.code} - ${airport.city} (${airport.name})`)
-      .slice(0, 10); // Limit to 10 suggestions
+    // Use the shared airports array from airports.js
+    return airports.filter(
+      (airport) =>
+        airport.code.toLowerCase().includes(query.toLowerCase()) ||
+        airport.name.toLowerCase().includes(query.toLowerCase()) ||
+        (airport.full &&
+          airport.full.toLowerCase().includes(query.toLowerCase()))
+    );
   }
 
   function getCitySuggestions(query) {
@@ -467,10 +379,16 @@ document.addEventListener("DOMContentLoaded", function () {
         console.log("Flight search response:", data);
 
         if (data.success && data.flights && data.flights.length > 0) {
-          console.log(`Found ${data.flights.length} flights from ${data.provider || 'API'}`);
+          console.log(
+            `Found ${data.flights.length} flights from ${
+              data.provider || "API"
+            }`
+          );
           displayResults(type, data.flights);
           showToast(
-            `Found ${data.flights.length} flight options! (${data.provider || 'API'})`,
+            `Found ${data.flights.length} flight options! (${
+              data.provider || "API"
+            })`,
             "success"
           );
         } else {
@@ -593,11 +511,11 @@ document.addEventListener("DOMContentLoaded", function () {
     // Get raw input values
     const originInput = document.getElementById("flight-from")?.value || "";
     const destinationInput = document.getElementById("flight-to")?.value || "";
-    
+
     // Extract airport codes (handle formats like "JFK - New York" -> "JFK")
     let origin = originInput.toUpperCase();
     let destination = destinationInput.toUpperCase();
-    
+
     // Extract 3-letter airport codes from the beginning of the string
     // Handle formats like: "JFK - New York", "BOM - MUMBAI (CHHATRAPATI SHIVAJI MAHARAJ INTERNATIONAL AIRPORT)"
     if (origin.includes(" - ")) {
@@ -606,18 +524,18 @@ document.addEventListener("DOMContentLoaded", function () {
     if (destination.includes(" - ")) {
       destination = destination.split(" - ")[0].trim();
     }
-    
+
     // Additional cleanup - remove any extra text after the 3-letter code
     origin = origin.substring(0, 3);
     destination = destination.substring(0, 3);
-    
+
     // Validate airport codes (must be 3 letters)
     if (origin.length !== 3 || destination.length !== 3) {
       console.warn(`Invalid airport codes: ${origin} -> ${destination}`);
     }
-    
+
     console.log(`Extracted airport codes: ${origin} -> ${destination}`);
-    
+
     const data = {
       origin: origin,
       destination: destination,

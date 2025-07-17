@@ -932,87 +932,14 @@ class RecommendationsPage {
   }
 
   getAirportSuggestions(query) {
-    console.log(`Getting airport suggestions for: "${query}"`);
-
-    // Common airport codes and names
-    const airports = [
-      { code: "JFK", name: "New York", full: "JFK - New York" },
-      { code: "LAX", name: "Los Angeles", full: "LAX - Los Angeles" },
-      { code: "ORD", name: "Chicago", full: "ORD - Chicago" },
-      { code: "DFW", name: "Dallas", full: "DFW - Dallas" },
-      { code: "ATL", name: "Atlanta", full: "ATL - Atlanta" },
-      { code: "DEN", name: "Denver", full: "DEN - Denver" },
-      { code: "SFO", name: "San Francisco", full: "SFO - San Francisco" },
-      { code: "LAS", name: "Las Vegas", full: "LAS - Las Vegas" },
-      { code: "MIA", name: "Miami", full: "MIA - Miami" },
-      { code: "BOS", name: "Boston", full: "BOS - Boston" },
-      { code: "SEA", name: "Seattle", full: "SEA - Seattle" },
-      { code: "IAH", name: "Houston", full: "IAH - Houston" },
-      { code: "MCO", name: "Orlando", full: "MCO - Orlando" },
-      { code: "PHX", name: "Phoenix", full: "PHX - Phoenix" },
-      { code: "DTW", name: "Detroit", full: "DTW - Detroit" },
-      { code: "BOM", name: "Mumbai", full: "BOM - Mumbai" },
-      { code: "DEL", name: "Delhi", full: "DEL - Delhi" },
-      { code: "BLR", name: "Bangalore", full: "BLR - Bangalore" },
-      { code: "MAA", name: "Chennai", full: "MAA - Chennai" },
-      { code: "HYD", name: "Hyderabad", full: "HYD - Hyderabad" },
-      { code: "CCU", name: "Kolkata", full: "CCU - Kolkata" },
-      { code: "GOI", name: "Goa", full: "GOI - Goa" },
-      { code: "LHR", name: "London", full: "LHR - London" },
-      { code: "CDG", name: "Paris", full: "CDG - Paris" },
-      { code: "FRA", name: "Frankfurt", full: "FRA - Frankfurt" },
-      { code: "AMS", name: "Amsterdam", full: "AMS - Amsterdam" },
-      { code: "MAD", name: "Madrid", full: "MAD - Madrid" },
-      { code: "BCN", name: "Barcelona", full: "BCN - Barcelona" },
-      { code: "NRT", name: "Tokyo", full: "NRT - Tokyo" },
-      { code: "HND", name: "Tokyo Haneda", full: "HND - Tokyo Haneda" },
-      { code: "ICN", name: "Seoul", full: "ICN - Seoul" },
-      { code: "SIN", name: "Singapore", full: "SIN - Singapore" },
-      { code: "BKK", name: "Bangkok", full: "BKK - Bangkok" },
-      { code: "HKG", name: "Hong Kong", full: "HKG - Hong Kong" },
-      { code: "SYD", name: "Sydney", full: "SYD - Sydney" },
-      { code: "MEL", name: "Melbourne", full: "MEL - Melbourne" },
-      { code: "YVR", name: "Vancouver", full: "YVR - Vancouver" },
-      { code: "YYZ", name: "Toronto", full: "YYZ - Toronto" },
-      { code: "YUL", name: "Montreal", full: "YUL - Montreal" },
-      { code: "DXB", name: "Dubai", full: "DXB - Dubai" },
-      { code: "IST", name: "Istanbul", full: "IST - Istanbul" },
-      { code: "FCO", name: "Rome", full: "FCO - Rome" },
-      { code: "MXP", name: "Milan", full: "MXP - Milan" },
-      { code: "ZRH", name: "Zurich", full: "ZRH - Zurich" },
-      { code: "VIE", name: "Vienna", full: "VIE - Vienna" },
-      { code: "CPH", name: "Copenhagen", full: "CPH - Copenhagen" },
-      { code: "ARN", name: "Stockholm", full: "ARN - Stockholm" },
-      { code: "OSL", name: "Oslo", full: "OSL - Oslo" },
-      { code: "HEL", name: "Helsinki", full: "HEL - Helsinki" },
-      { code: "WAW", name: "Warsaw", full: "WAW - Warsaw" },
-      { code: "PRG", name: "Prague", full: "PRG - Prague" },
-      { code: "BUD", name: "Budapest", full: "BUD - Budapest" },
-      { code: "ATH", name: "Athens", full: "ATH - Athens" },
-      { code: "LIS", name: "Lisbon", full: "LIS - Lisbon" },
-      { code: "OPO", name: "Porto", full: "OPO - Porto" },
-      { code: "DUB", name: "Dublin", full: "DUB - Dublin" },
-      { code: "EDI", name: "Edinburgh", full: "EDI - Edinburgh" },
-      { code: "MAN", name: "Manchester", full: "MAN - Manchester" },
-      { code: "BHX", name: "Birmingham", full: "BHX - Birmingham" },
-      { code: "GLA", name: "Glasgow", full: "GLA - Glasgow" },
-      { code: "NCL", name: "Newcastle", full: "NCL - Newcastle" },
-      { code: "LPL", name: "Liverpool", full: "LPL - Liverpool" },
-      { code: "BRS", name: "Bristol", full: "BRS - Bristol" },
-      { code: "LTN", name: "London Luton", full: "LTN - London Luton" },
-      { code: "STN", name: "London Stansted", full: "STN - London Stansted" },
-      { code: "LCY", name: "London City", full: "LCY - London City" },
-      { code: "LGW", name: "London Gatwick", full: "LGW - London Gatwick" },
-    ];
-
-    const filtered = airports.filter(
+    // Use the shared airports array from airports.js
+    return airports.filter(
       (airport) =>
         airport.code.toLowerCase().includes(query.toLowerCase()) ||
-        airport.name.toLowerCase().includes(query.toLowerCase())
+        airport.name.toLowerCase().includes(query.toLowerCase()) ||
+        (airport.full &&
+          airport.full.toLowerCase().includes(query.toLowerCase()))
     );
-
-    console.log(`Filtered to ${filtered.length} airports`);
-    return filtered.slice(0, 10); // Limit to 10 suggestions
   }
 
   showSuggestions(input, suggestions) {

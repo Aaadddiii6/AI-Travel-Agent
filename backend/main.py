@@ -2740,7 +2740,7 @@ def enhance_prompt_with_openai(user_prompt: str) -> str:
             "The goal is to show the person's face clearly in the travel setting. "
             "Use phrases like 'a person with their face clearly visible', 'showing the person's face', "
             "'the person's face is prominent, as well as the background details are important', etc. "
-            "Keep it under 200 words and focus on the person first, then the location."
+            "Keep it under 100 words and focus on the person first, then the location."
         )
         response = openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
