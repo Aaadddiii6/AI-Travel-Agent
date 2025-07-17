@@ -411,25 +411,11 @@ class UploadPage {
     }
 
     if (viewDestinationsBtn) {
-      viewDestinationsBtn.textContent = "Browse Destinations";
-      viewDestinationsBtn.onclick = () => this.navigateToDestinations();
+      // Removed 'Browse Destinations' button and navigation to keep user in SPA flow
     }
   }
 
-  navigateToDestinations() {
-    // Store uploaded photo URL in session storage for destinations page
-    console.log(
-      "Navigating to destinations with photo URL:",
-      this.uploadedPhotoUrl
-    ); // Debug log
-    if (this.uploadedPhotoUrl) {
-      sessionStorage.setItem("uploadedPhotoUrl", this.uploadedPhotoUrl);
-      console.log("Photo URL saved to session storage"); // Debug log
-    } else {
-      console.log("No photo URL to save"); // Debug log
-    }
-    window.location.href = "destinations.html";
-  }
+  // Removed navigateToDestinations to prevent navigation to Explore Destinations page
 
   saveUploadResult() {
     if (this.uploadedPhotoUrl) {

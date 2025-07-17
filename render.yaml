@@ -7,7 +7,9 @@ services:
     startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: 3.11.7
+      - key: PIP_VERSION
+        value: 23.3.1
       - key: RENDER
         value: true
       - key: SUPABASE_URL
@@ -22,3 +24,13 @@ services:
         sync: false
       - key: HUGGINGFACE_TOKEN
         sync: false
+
+  - type: web
+    name: ai-travel-agent-frontend
+    env: static
+    plan: free
+    buildCommand: echo "Frontend files ready"
+    staticPublishPath: ./frontend
+    envVars:
+      - key: RENDER
+        value: true

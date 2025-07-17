@@ -1,20 +1,3 @@
-# Environment variables
-.env
-.env.local
-.env.production
-.env.development
-
-# API keys and secrets
-*.key
-*.pem
-*.p12
-*.pfx
-
-# Logs
-*.log
-logs/
-app.log
-
 # Python
 __pycache__/
 *.py[cod]
@@ -39,8 +22,10 @@ wheels/
 MANIFEST
 
 # Virtual environments
-venv/
+.env
+.venv
 env/
+venv/
 ENV/
 env.bak/
 venv.bak/
@@ -61,24 +46,32 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3
+
+# Environment variables
+.env
+.env.local
+.env.production
+
 # Temporary files
 *.tmp
 *.temp
 temp/
 tmp/
 
-# Uploads and generated content
-uploads/
-generated/
-static/uploads/
-static/generated/
+# Generated images (optional - remove if you want to keep them)
+backend/static/uploads/generated_*.webp
+backend/static/uploads/generated_*.png
+backend/static/uploads/generated_*.jpg
 
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# Configuration files with secrets
-config.json
-secrets.json
-credentials.json 
+# Node modules (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log* 

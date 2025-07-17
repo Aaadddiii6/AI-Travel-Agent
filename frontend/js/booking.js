@@ -447,32 +447,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
         // Debug: Log the search data
         console.log("Flight search data:", searchData);
-        console.log(
-          "Flight search data JSON:",
-          JSON.stringify(searchData, null, 2)
-        );
-
-        // Validate required fields before sending request
-        if (!searchData.origin || searchData.origin.length < 2) {
-          showToast(
-            "Please enter a valid departure airport code (e.g., JFK, LAX)",
-            "error"
-          );
-          return;
-        }
-
-        if (!searchData.destination || searchData.destination.length < 2) {
-          showToast(
-            "Please enter a valid destination airport code (e.g., JFK, LAX)",
-            "error"
-          );
-          return;
-        }
-
-        if (!searchData.departure_date) {
-          showToast("Please select a departure date", "error");
-          return;
-        }
 
         const response = await fetch(
           "http://localhost:8000/api/search-flights",
@@ -486,27 +460,17 @@ document.addEventListener("DOMContentLoaded", function () {
         );
 
         if (!response.ok) {
-          // Try to get the error details from the response
-          let errorMessage = `HTTP error! status: ${response.status}`;
-          try {
-            const errorData = await response.json();
-            if (errorData.detail) {
-              errorMessage = errorData.detail;
-            }
-          } catch (e) {
-            // If we can't parse the error response, use the default message
-          }
-          throw new Error(errorMessage);
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
 
         data = await response.json();
         console.log("Flight search response:", data);
 
         if (data.success && data.flights && data.flights.length > 0) {
-          console.log(`Found ${data.flights.length} flights from Amadeus API`);
+          console.log(`Found ${data.flights.length} flights from ${data.provider || 'API'}`);
           displayResults(type, data.flights);
           showToast(
-            `Found ${data.flights.length} flight options! (Amadeus API)`,
+            `Found ${data.flights.length} flight options! (${data.provider || 'API'})`,
             "success"
           );
         } else {
@@ -626,12 +590,37 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function getFlightSearchData() {
-    // Format data specifically for the Amadeus API
+    // Get raw input values
+    const originInput = document.getElementById("flight-from")?.value || "";
+    const destinationInput = document.getElementById("flight-to")?.value || "";
+    
+    // Extract airport codes (handle formats like "JFK - New York" -> "JFK")
+    let origin = originInput.toUpperCase();
+    let destination = destinationInput.toUpperCase();
+    
+    // Extract 3-letter airport codes from the beginning of the string
+    // Handle formats like: "JFK - New York", "BOM - MUMBAI (CHHATRAPATI SHIVAJI MAHARAJ INTERNATIONAL AIRPORT)"
+    if (origin.includes(" - ")) {
+      origin = origin.split(" - ")[0].trim();
+    }
+    if (destination.includes(" - ")) {
+      destination = destination.split(" - ")[0].trim();
+    }
+    
+    // Additional cleanup - remove any extra text after the 3-letter code
+    origin = origin.substring(0, 3);
+    destination = destination.substring(0, 3);
+    
+    // Validate airport codes (must be 3 letters)
+    if (origin.length !== 3 || destination.length !== 3) {
+      console.warn(`Invalid airport codes: ${origin} -> ${destination}`);
+    }
+    
+    console.log(`Extracted airport codes: ${origin} -> ${destination}`);
+    
     const data = {
-      origin:
-        document.getElementById("flight-from")?.value?.toUpperCase() || "",
-      destination:
-        document.getElementById("flight-to")?.value?.toUpperCase() || "",
+      origin: origin,
+      destination: destination,
       departure_date: document.getElementById("flight-depart")?.value || "",
       return_date: document.getElementById("flight-return")?.value || null,
       adults: parseInt(

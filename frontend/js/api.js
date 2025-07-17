@@ -1,436 +1,579 @@
-// API Service for Travel Agent App
+// Simple API Service with Fallback Data
 class APIService {
   constructor() {
-    this.baseURL = "http://localhost:8000"; // Local backend URL for development
-    this.endpoints = {
-      upload: "/api/upload-photo",
-      destinations: "/api/destinations",
-      continents: "/api/continents",
-      visualizations: "/api/visualizations",
-      generateVisualization: "/api/generate-visualization",
-      health: "/health",
-      generatePersonalizedRecommendations:
-        "/api/generate-personalized-recommendations",
-      generateTextToImage: "/api/generate-text-to-image",
-      generateLightXImage: "/api/generate-lightx-image",
-      book: "/api/book",
-      generatePhotoAppImage: "/api/generate-photo-app-image",
-    };
-    this.retryAttempts = 3;
-    this.retryDelay = 1000;
+    this.baseURL = "http://localhost:8000/api";
   }
 
-  // Generic request method with retry logic
-  async request(endpoint, options = {}, retryCount = 0) {
-    const url = `${this.baseURL}${endpoint}`;
-    const config = {
-      headers: {
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
-      ...options,
-    };
-
-    try {
-      const response = await fetch(url, config);
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData.detail || `HTTP error! status: ${response.status}`
-        );
-      }
-
-      return await response.json();
-    } catch (error) {
-      console.error("API request failed:", error);
-
-      // Retry logic for network errors
-      if (retryCount < this.retryAttempts && this.isRetryableError(error)) {
-        console.log(
-          `Retrying request (${retryCount + 1}/${this.retryAttempts})...`
-        );
-        await this.delay(this.retryDelay * Math.pow(2, retryCount));
-        return this.request(endpoint, options, retryCount + 1);
-      }
-
-      throw error;
-    }
-  }
-
-  isRetryableError(error) {
-    return (
-      error.name === "TypeError" || error.message.includes("Failed to fetch")
-    );
-  }
-
-  delay(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  // Upload photo with progress tracking
-  async uploadPhoto(file, onProgress = null) {
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
-      const xhr = new XMLHttpRequest();
-
-      return new Promise((resolve, reject) => {
-        xhr.upload.addEventListener("progress", (e) => {
-          if (e.lengthComputable && onProgress) {
-            const percentComplete = (e.loaded / e.total) * 100;
-            onProgress(percentComplete);
-          }
-        });
-
-        xhr.addEventListener("load", () => {
-          if (xhr.status === 200) {
-            try {
-              const response = JSON.parse(xhr.responseText);
-              resolve(response);
-            } catch (error) {
-              reject(new Error("Invalid response format"));
-            }
-          } else {
-            try {
-              const errorData = JSON.parse(xhr.responseText);
-              reject(
-                new Error(errorData.detail || `Upload failed: ${xhr.status}`)
-              );
-            } catch (error) {
-              reject(new Error(`Upload failed: ${xhr.status}`));
-            }
-          }
-        });
-
-        xhr.addEventListener("error", () => {
-          reject(new Error("Network error during upload"));
-        });
-
-        xhr.addEventListener("timeout", () => {
-          reject(new Error("Upload timeout"));
-        });
-
-        xhr.open("POST", `${this.baseURL}${this.endpoints.upload}`);
-        xhr.timeout = 30000; // 30 seconds timeout
-        xhr.send(formData);
-      });
-    } catch (error) {
-      console.error("Photo upload failed:", error);
-      throw error;
-    }
-  }
-
-  // Get destinations with filtering
-  async getDestinations(continent = null, limit = 50) {
-    const params = new URLSearchParams();
-    if (continent) params.append("continent", continent);
-    if (limit) params.append("limit", limit.toString());
-
-    const endpoint = `${this.endpoints.destinations}?${params.toString()}`;
-    return this.request(endpoint, { method: "GET" });
-  }
-
-  // Get continents
-  async getContinents() {
-    return this.request(this.endpoints.continents, { method: "GET" });
-  }
-
-  // Get all visualizations
-  async getVisualizations(limit = 20) {
-    const endpoint = `${this.endpoints.visualizations}?limit=${limit}`;
-    return this.request(endpoint, { method: "GET" });
-  }
-
-  // Generate visualization
-  async generateVisualization(
-    userPhotoUrl,
-    destinationId = null,
-    prompt = null
-  ) {
-    const data = { user_photo_url: userPhotoUrl };
-    if (destinationId) data.destination_id = destinationId;
-    // Ensure prompt is always a string, never null or undefined
-    data.prompt = prompt || ""; // Convert null/undefined to empty string
-
-    // Debug logging
-    console.log("Sending visualization request:", {
-      userPhotoUrl,
-      destinationId,
-      prompt: data.prompt,
-      promptLength: data.prompt.length,
-    });
-
-    return this.request(this.endpoints.generateVisualization, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
-  // Generate personalized recommendations
-  async generatePersonalizedRecommendations(preferences) {
-    return this.request(this.endpoints.generatePersonalizedRecommendations, {
-      method: "POST",
-      body: JSON.stringify(preferences),
-    });
-  }
-
-  // Generate text-to-image
-  async generateTextToImage(prompt, style = null) {
-    const data = {
-      prompt: prompt,
-      style: style,
-    };
-
-    return this.request(this.endpoints.generateTextToImage, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
-  // Generate LightX image
-  async generateLightXImage(prompt, image = null) {
-    const data = {
-      prompt: prompt,
-      image: image,
-    };
-
-    return this.request(this.endpoints.generateLightXImage, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
-  // Check backend health
   async checkBackendHealth() {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-      const response = await fetch(`${this.baseURL}${this.endpoints.health}`, {
+      const response = await fetch(`${this.baseURL}/health`, {
         method: "GET",
-        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
       });
-
-      clearTimeout(timeoutId);
       return response.ok;
     } catch (error) {
-      console.warn("Backend not available:", error);
+      console.error("Backend health check failed:", error);
       return false;
     }
   }
 
-  // Create booking
-  async createBooking(bookingData) {
-    return this.request(this.endpoints.book, {
-      method: "POST",
-      body: JSON.stringify(bookingData),
-    });
-  }
-
-  // Mock data for development (when backend is not available)
+  // Add a mock destinations method for destinations.js
   getMockDestinations() {
     return [
       {
-        id: "550e8400-e29b-41d4-a716-446655440001",
-        name: "Santorini, Greece",
-        country: "Greece",
-        city: "Santorini",
-        continent: "Europe",
-        description:
-          "Famous for its stunning sunsets, white-washed buildings, and crystal-clear waters. Perfect for romantic getaways and photography enthusiasts.",
-        image_url:
-          "https://images.unsplash.com/photo-1570077188670-e3a8d69ac5ff?w=400&h=300&fit=crop",
-        rating: 4.8,
-        price: "$$$",
-        bestTime: "May-October",
-        highlights: [
-          "Oia Sunset",
-          "Blue Domes",
-          "Wine Tasting",
-          "Beach Hopping",
-        ],
-      },
-      {
-        id: "550e8400-e29b-41d4-a716-446655440002",
-        name: "Kyoto, Japan",
+        id: "tokyo",
+        name: "Tokyo",
         country: "Japan",
-        city: "Kyoto",
-        continent: "Asia",
-        description:
-          "Ancient capital with traditional temples, beautiful gardens, and cherry blossoms. A perfect blend of history and natural beauty.",
-        image_url:
-          "https://images.unsplash.com/photo-1545569341-9eb8b30979d9?w=400&h=300&fit=crop",
-        rating: 4.7,
-        price: "$$",
-        bestTime: "March-May, October-November",
-        highlights: [
-          "Cherry Blossoms",
-          "Temples",
-          "Tea Ceremony",
-          "Bamboo Forest",
-        ],
+        description: "Modern metropolis with ancient traditions.",
       },
       {
-        id: "550e8400-e29b-41d4-a716-446655440003",
-        name: "Banff National Park",
-        country: "Canada",
-        city: "Banff",
-        continent: "North America",
-        description:
-          "Stunning mountain landscapes, turquoise lakes, and abundant wildlife. A paradise for nature lovers and outdoor enthusiasts.",
-        image_url:
-          "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400&h=300&fit=crop",
-        rating: 4.9,
-        price: "$$",
-        bestTime: "June-September",
-        highlights: ["Lake Louise", "Hiking", "Wildlife", "Hot Springs"],
+        id: "paris",
+        name: "Paris",
+        country: "France",
+        description: "City of light and romance.",
       },
       {
-        id: "550e8400-e29b-41d4-a716-446655440004",
-        name: "Marrakech, Morocco",
-        country: "Morocco",
-        city: "Marrakech",
-        continent: "Africa",
-        description:
-          "Vibrant souks, stunning architecture, and rich culture. Experience the magic of the Red City with its bustling markets and historic medina.",
-        image_url:
-          "https://images.unsplash.com/photo-1553603229-0f1a5d2c735c?w=400&h=300&fit=crop",
-        rating: 4.6,
-        price: "$",
-        bestTime: "March-May, September-November",
-        highlights: [
-          "Medina",
-          "Jardin Majorelle",
-          "Atlas Mountains",
-          "Traditional Riads",
-        ],
-      },
-      {
-        id: "550e8400-e29b-41d4-a716-446655440005",
-        name: "Queenstown, New Zealand",
-        country: "New Zealand",
-        city: "Queenstown",
-        continent: "Oceania",
-        description:
-          "Adventure capital of the world with breathtaking landscapes, adrenaline activities, and world-class wine regions.",
-        image_url:
-          "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400&h=300&fit=crop",
-        rating: 4.8,
-        price: "$$",
-        bestTime: "December-February",
-        highlights: [
-          "Bungee Jumping",
-          "Milford Sound",
-          "Wine Tasting",
-          "Hiking",
-        ],
-      },
-      {
-        id: "550e8400-e29b-41d4-a716-446655440006",
-        name: "Reykjavik, Iceland",
-        country: "Iceland",
-        city: "Reykjavik",
-        continent: "Europe",
-        description:
-          "Land of fire and ice with geothermal hot springs, northern lights, and dramatic landscapes. A unique Nordic experience.",
-        image_url:
-          "https://images.unsplash.com/photo-1553603229-0f1a5d2c735c?w=400&h=300&fit=crop",
-        rating: 4.7,
-        price: "$$$",
-        bestTime: "June-August, September-March",
-        highlights: [
-          "Northern Lights",
-          "Blue Lagoon",
-          "Golden Circle",
-          "Geysers",
-        ],
+        id: "new-york",
+        name: "New York",
+        country: "USA",
+        description: "The city that never sleeps.",
       },
     ];
   }
 
-  getMockVisualizations() {
-    return [
-      {
-        id: "550e8400-e29b-41d4-a716-446655440007",
-        title: "Santorini Sunset Analysis",
-        location: "Oia, Greece",
-        date: "2024-01-15",
-        image:
-          "https://images.unsplash.com/photo-1570077188670-e3a8d69ac5ff?w=400&h=300&fit=crop",
-        type: "sunset",
-        confidence: 0.95,
-        recommendations: [
-          "Best viewing spots",
-          "Optimal timing",
-          "Photography tips",
-        ],
-      },
-      {
-        id: "550e8400-e29b-41d4-a716-446655440008",
-        title: "Kyoto Temple Architecture",
-        location: "Kyoto, Japan",
-        date: "2024-01-10",
-        image:
-          "https://images.unsplash.com/photo-1545569341-9eb8b30979d9?w=400&h=300&fit=crop",
-        type: "architecture",
-        confidence: 0.92,
-        recommendations: [
-          "Historical significance",
-          "Cultural context",
-          "Visit timing",
-        ],
-      },
-      {
-        id: "550e8400-e29b-41d4-a716-446655440009",
-        title: "Banff Mountain Landscape",
-        location: "Banff, Canada",
-        date: "2024-01-05",
-        image:
-          "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400&h=300&fit=crop",
-        type: "landscape",
-        confidence: 0.88,
-        recommendations: [
-          "Hiking trails",
-          "Wildlife spotting",
-          "Seasonal highlights",
-        ],
-      },
-      {
-        id: "550e8400-e29b-41d4-a716-446655440010",
-        title: "Marrakech Market Scene",
-        location: "Marrakech, Morocco",
-        date: "2024-01-01",
-        image:
-          "https://images.unsplash.com/photo-1553603229-0f1a5d2c735c?w=400&h=300&fit=crop",
-        type: "culture",
-        confidence: 0.9,
-        recommendations: [
-          "Market etiquette",
-          "Bargaining tips",
-          "Local customs",
-        ],
-      },
-    ];
-  }
-
-  // Generate photo app image (selfie + prompt only)
-  async generatePhotoAppImage(file, prompt) {
-    const formData = new FormData();
-    formData.append("selfie", file);
-    formData.append("prompt", prompt);
-    return fetch(`${this.baseURL}${this.endpoints.generatePhotoAppImage}`, {
-      method: "POST",
-      body: formData,
-    })
-      .then((response) => response.json())
-      .catch((error) => {
-        console.error("Photo app image generation failed:", error);
-        throw error;
+  async getDestinations() {
+    try {
+      const response = await fetch(`${this.baseURL}/destinations`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
       });
+      if (response.ok) {
+        return await response.json();
+      } else {
+        // fallback to mock data
+        return this.getMockDestinations();
+      }
+    } catch (error) {
+      console.error("Failed to fetch destinations:", error);
+      return this.getMockDestinations();
+    }
+  }
+
+  // Get Continents with Fallback Data
+  async getContinents() {
+    try {
+      console.log("Getting continents...");
+      // Try the backend first
+      const response = await fetch(`${this.baseURL}/continents`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log("Backend continents:", data);
+        return { success: true, data: data };
+      } else {
+        throw new Error("Backend continents failed");
+      }
+    } catch (error) {
+      console.log("Using fallback continents data");
+      // Return fallback data
+      return {
+        success: true,
+        data: [
+          {
+            name: "Asia",
+            count: 48,
+            description:
+              "Largest continent with diverse cultures, ancient civilizations, and modern cities",
+            visual_theme: "diverse landscapes and cultures",
+          },
+          {
+            name: "Europe",
+            count: 44,
+            description:
+              "Historic continent with rich culture, art, and architecture",
+            visual_theme: "historic cities and cultural heritage",
+          },
+          {
+            name: "North America",
+            count: 23,
+            description:
+              "Vast continent with diverse landscapes from Arctic to tropical",
+            visual_theme: "natural wonders and modern cities",
+          },
+          {
+            name: "Africa",
+            count: 54,
+            description:
+              "Continent of incredible wildlife, ancient history, and diverse cultures",
+            visual_theme: "wildlife and natural beauty",
+          },
+          {
+            name: "Oceania",
+            count: 14,
+            description:
+              "Island continent with stunning beaches and unique wildlife",
+            visual_theme: "island paradise and marine life",
+          },
+          {
+            name: "South America",
+            count: 12,
+            description:
+              "Continent of Amazon rainforest, Andes mountains, and vibrant cultures",
+            visual_theme: "rainforest and mountain landscapes",
+          },
+          {
+            name: "Antarctica",
+            count: 0,
+            description:
+              "Frozen continent of pristine wilderness and scientific research",
+            visual_theme: "ice and snow landscapes",
+          },
+        ],
+      };
+    }
+  }
+
+  // Get Countries with Fallback Data
+  async getCountriesByContinent(continentName) {
+    console.log("Getting countries for:", continentName);
+    // Return fallback data
+    const fallbackCountries = {
+      Asia: [
+        {
+          name: "Japan",
+          description:
+            "Land of the rising sun with ancient traditions and modern technology",
+          cities: ["Tokyo", "Kyoto", "Osaka"],
+        },
+        {
+          name: "Thailand",
+          description: "Land of smiles with beautiful beaches and rich culture",
+          cities: ["Bangkok", "Phuket", "Chiang Mai"],
+        },
+        {
+          name: "India",
+          description:
+            "Incredible diversity with ancient history and vibrant culture",
+          cities: ["Mumbai", "Delhi", "Jaipur"],
+        },
+        {
+          name: "Vietnam",
+          description: "Stunning landscapes and delicious cuisine",
+          cities: ["Ho Chi Minh City", "Hanoi", "Da Nang"],
+        },
+        {
+          name: "South Korea",
+          description: "Modern cities and traditional culture",
+          cities: ["Seoul", "Busan", "Jeju"],
+        },
+      ],
+      Europe: [
+        {
+          name: "France",
+          description: "Art, culture, and culinary excellence",
+          cities: ["Paris", "Lyon", "Nice"],
+        },
+        {
+          name: "Italy",
+          description: "Ancient history, art, and delicious food",
+          cities: ["Rome", "Florence", "Venice"],
+        },
+        {
+          name: "Spain",
+          description: "Vibrant culture, beaches, and architecture",
+          cities: ["Madrid", "Barcelona", "Seville"],
+        },
+        {
+          name: "Germany",
+          description: "Efficient cities and beautiful countryside",
+          cities: ["Berlin", "Munich", "Hamburg"],
+        },
+        {
+          name: "Netherlands",
+          description: "Windmills, tulips, and cycling culture",
+          cities: ["Amsterdam", "Rotterdam", "The Hague"],
+        },
+      ],
+      "North America": [
+        {
+          name: "United States",
+          description: "Land of opportunity with diverse landscapes",
+          cities: ["New York", "Los Angeles", "Chicago"],
+        },
+        {
+          name: "Canada",
+          description: "Vast wilderness and friendly cities",
+          cities: ["Toronto", "Vancouver", "Montreal"],
+        },
+        {
+          name: "Mexico",
+          description: "Rich culture and beautiful beaches",
+          cities: ["Mexico City", "Cancun", "Guadalajara"],
+        },
+      ],
+      Africa: [
+        {
+          name: "South Africa",
+          description: "Diverse wildlife and stunning landscapes",
+          cities: ["Cape Town", "Johannesburg", "Durban"],
+        },
+        {
+          name: "Egypt",
+          description: "Ancient pyramids and rich history",
+          cities: ["Cairo", "Luxor", "Alexandria"],
+        },
+        {
+          name: "Morocco",
+          description: "Exotic markets and desert adventures",
+          cities: ["Marrakech", "Casablanca", "Fez"],
+        },
+      ],
+      Oceania: [
+        {
+          name: "Australia",
+          description: "Unique wildlife and stunning coastlines",
+          cities: ["Sydney", "Melbourne", "Brisbane"],
+        },
+        {
+          name: "New Zealand",
+          description: "Adventure paradise with natural beauty",
+          cities: ["Auckland", "Wellington", "Christchurch"],
+        },
+      ],
+      "South America": [
+        {
+          name: "Brazil",
+          description: "Carnival spirit and Amazon rainforest",
+          cities: ["Rio de Janeiro", "São Paulo", "Salvador"],
+        },
+        {
+          name: "Argentina",
+          description: "Tango culture and Patagonian wilderness",
+          cities: ["Buenos Aires", "Córdoba", "Mendoza"],
+        },
+        {
+          name: "Peru",
+          description: "Ancient Incan ruins and diverse landscapes",
+          cities: ["Lima", "Cusco", "Arequipa"],
+        },
+      ],
+    };
+
+    return { success: true, data: fallbackCountries[continentName] || [] };
+  }
+
+  // Get Cities with Fallback Data
+  async getCitiesByCountry(countryName) {
+    console.log("Getting cities for:", countryName);
+    // Return fallback data
+    const fallbackCities = {
+      Japan: [
+        {
+          id: "tokyo",
+          name: "Tokyo",
+          description: "Modern metropolis with ancient traditions",
+          areas: ["Shibuya", "Shinjuku", "Harajuku"],
+        },
+        {
+          id: "kyoto",
+          name: "Kyoto",
+          description: "Ancient capital with temples and gardens",
+          areas: ["Gion", "Arashiyama", "Higashiyama"],
+        },
+        {
+          id: "osaka",
+          name: "Osaka",
+          description: "Food capital with vibrant nightlife",
+          areas: ["Dotonbori", "Namba", "Umeda"],
+        },
+      ],
+      France: [
+        {
+          id: "paris",
+          name: "Paris",
+          description: "City of light with art and romance",
+          areas: ["Eiffel Tower", "Louvre", "Montmartre"],
+        },
+        {
+          id: "lyon",
+          name: "Lyon",
+          description: "Gastronomic capital of France",
+          areas: ["Vieux Lyon", "Presqu'île", "Croix-Rousse"],
+        },
+        {
+          id: "nice",
+          name: "Nice",
+          description: "Beautiful coastal city on the French Riviera",
+          areas: ["Promenade des Anglais", "Old Town", "Cimiez"],
+        },
+      ],
+      "United States": [
+        {
+          id: "new-york",
+          name: "New York",
+          description: "The city that never sleeps",
+          areas: ["Manhattan", "Brooklyn", "Queens"],
+        },
+        {
+          id: "los-angeles",
+          name: "Los Angeles",
+          description: "Entertainment capital of the world",
+          areas: ["Hollywood", "Venice Beach", "Downtown"],
+        },
+        {
+          id: "chicago",
+          name: "Chicago",
+          description: "Windy city with amazing architecture",
+          areas: ["Loop", "Magnificent Mile", "Wicker Park"],
+        },
+      ],
+      Australia: [
+        {
+          id: "sydney",
+          name: "Sydney",
+          description: "Harbor city with iconic opera house",
+          areas: ["CBD", "Bondi Beach", "The Rocks"],
+        },
+        {
+          id: "melbourne",
+          name: "Melbourne",
+          description: "Cultural capital with great coffee",
+          areas: ["CBD", "St Kilda", "Fitzroy"],
+        },
+      ],
+    };
+
+    return { success: true, data: fallbackCities[countryName] || [] };
+  }
+
+  // Get Areas with Fallback Data
+  async getAreasByCity(cityName) {
+    console.log("Getting areas for:", cityName);
+    // Return fallback data
+    const fallbackAreas = {
+      Tokyo: [
+        {
+          id: "shibuya",
+          name: "Shibuya",
+          description: "Fashion and youth culture district",
+          activities: ["Shopping", "People watching", "Nightlife"],
+        },
+        {
+          id: "shinjuku",
+          name: "Shinjuku",
+          description: "Business and entertainment district",
+          activities: ["Skyscrapers", "Golden Gai", "Shinjuku Gyoen"],
+        },
+        {
+          id: "harajuku",
+          name: "Harajuku",
+          description: "Fashion and street culture",
+          activities: ["Takeshita Street", "Meiji Shrine", "Yoyogi Park"],
+        },
+      ],
+      Paris: [
+        {
+          id: "eiffel",
+          name: "Eiffel Tower Area",
+          description: "Iconic landmark and surrounding gardens",
+          activities: ["Eiffel Tower", "Champ de Mars", "Trocadéro"],
+        },
+        {
+          id: "louvre",
+          name: "Louvre District",
+          description: "Art and culture center",
+          activities: ["Louvre Museum", "Tuileries Garden", "Palais Royal"],
+        },
+        {
+          id: "montmartre",
+          name: "Montmartre",
+          description: "Artistic hilltop neighborhood",
+          activities: ["Sacré-Cœur", "Place du Tertre", "Moulin Rouge"],
+        },
+      ],
+      "New York": [
+        {
+          id: "manhattan",
+          name: "Manhattan",
+          description: "Heart of NYC with iconic landmarks",
+          activities: ["Times Square", "Central Park", "Broadway"],
+        },
+        {
+          id: "brooklyn",
+          name: "Brooklyn",
+          description: "Trendy borough with great food",
+          activities: ["Brooklyn Bridge", "Williamsburg", "DUMBO"],
+        },
+      ],
+    };
+
+    return { success: true, data: fallbackAreas[cityName] || [] };
+  }
+
+  // Generate Itinerary
+  async generateItinerary(destinationId, preferences) {
+    try {
+      const response = await fetch(`${this.baseURL}/generate-itinerary`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          destinationId: destinationId,
+          preferences: preferences,
+          prompt: "", // Optionally, you can build a prompt here if needed
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        // The backend returns { success, itinerary, message }
+        if (data.success && data.itinerary) {
+          return { success: true, data: data.itinerary };
+        } else {
+          return {
+            success: false,
+            error: data.message || "No itinerary returned",
+          };
+        }
+      } else {
+        return { success: false, error: `HTTP ${response.status}` };
+      }
+    } catch (error) {
+      console.error("Failed to fetch itinerary:", error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Generate Image
+  async generateDestinationImage(destinationId, userPhotoUrl) {
+    console.log("Generating image for:", destinationId);
+    // Return fallback image
+    const image = {
+      url: `https://source.unsplash.com/800x600/?${encodeURIComponent(
+        destinationId + " travel"
+      )}`,
+      prompt: `Travel photo of ${destinationId}`,
+    };
+
+    return { success: true, data: image };
+  }
+
+  // Generate Recommendations
+  async generatePersonalizedRecommendations(preferences) {
+    try {
+      const response = await fetch(
+        `${this.baseURL}/generate-personalized-recommendations`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(preferences),
+        }
+      );
+      if (response.ok) {
+        return await response.json();
+      } else {
+        throw new Error("Failed to fetch recommendations");
+      }
+    } catch (error) {
+      console.error("Failed to fetch recommendations:", error);
+      return { success: false, data: null, error: error.message };
+    }
+  }
+
+  // Get Recommendations (alias for generatePersonalizedRecommendations)
+  async getRecommendations(preferences) {
+    return this.generatePersonalizedRecommendations(preferences);
+  }
+
+  // Search Flights
+  async searchFlights(searchParams) {
+    console.log("Searching flights:", searchParams);
+    // Return fallback flight data
+    const flights = [
+      {
+        id: "flight1",
+        airline: "Sample Airlines",
+        departure: searchParams.origin,
+        arrival: searchParams.destination,
+        departureTime: "10:00 AM",
+        arrivalTime: "2:00 PM",
+        duration: "4h",
+        price: "$299",
+      },
+    ];
+
+    return { success: true, data: flights };
+  }
+
+  // Search Hotels
+  async searchHotels(searchParams) {
+    console.log("Searching hotels:", searchParams);
+    // Return fallback hotel data
+    const hotels = [
+      {
+        id: "hotel1",
+        name: "Sample Hotel",
+        location: searchParams.cityCode,
+        rating: 4.5,
+        price: "$150/night",
+        amenities: ["WiFi", "Pool", "Restaurant"],
+      },
+    ];
+
+    return { success: true, data: hotels };
+  }
+
+  // Filter Destinations
+  async filterDestinations(criteria) {
+    console.log("Filtering destinations:", criteria);
+    // Return fallback filtered destinations
+    return { success: true, data: [] };
+  }
+
+  async getFlights({ from, to, depart, adults }) {
+    try {
+      const response = await fetch(`${this.baseURL}/search-flights`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          origin: from,
+          destination: to,
+          departure_date: depart,
+          adults: adults,
+        }),
+      });
+      if (response.ok) {
+        return await response.json();
+      } else {
+        throw new Error("Failed to search flights");
+      }
+    } catch (error) {
+      console.error("Flight search error:", error);
+      throw error;
+    }
+  }
+
+  // Add the missing generatePhotoAppImage method
+  async generatePhotoAppImage(file, prompt) {
+    try {
+      const formData = new FormData();
+      formData.append("selfie", file);
+      formData.append("prompt", prompt);
+
+      const response = await fetch(`${this.baseURL}/generate-photo-app-image`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (response.ok) {
+        return await response.json();
+      } else {
+        throw new Error("Failed to generate photo app image");
+      }
+    } catch (error) {
+      console.error("Photo app image generation error:", error);
+      throw error;
+    }
   }
 }
-
-// Export for use in other modules
-window.APIService = APIService;

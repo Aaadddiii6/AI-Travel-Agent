@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, field_validator
-from supabase import create_client, Client
+from supabase.client import create_client, Client
 import os
 from dotenv import load_dotenv
 import uuid
@@ -82,7 +82,11 @@ app = FastAPI(
 )
 
 # Serve static files (for generated images)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+import os
+static_dir = "backend/static"
+if not os.path.exists(static_dir):
+    os.makedirs(static_dir, exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Enhanced CORS for production
 app.add_middleware(
@@ -121,14 +125,17 @@ amadeus_client = None
 try:
     amadeus_client_id = os.getenv("AMADEUS_CLIENT_ID")
     amadeus_client_secret = os.getenv("AMADEUS_CLIENT_SECRET")
-    if amadeus_client_id and amadeus_client_secret:
+    
+    # Check if credentials are actually set (not just empty strings)
+    if amadeus_client_id and amadeus_client_secret and amadeus_client_id != "your_amadeus_client_id_here" and amadeus_client_secret != "your_amadeus_client_secret_here":
         amadeus_client = AmadeusClient(
             client_id=amadeus_client_id,
             client_secret=amadeus_client_secret
         )
         logger.info("Amadeus client initialized successfully")
     else:
-        logger.warning("Amadeus credentials not found")
+        logger.warning("Amadeus credentials not found or not properly configured")
+        amadeus_client = None
 except Exception as e:
     logger.error(f"Failed to initialize Amadeus client: {e}")
     amadeus_client = None
@@ -152,6 +159,7 @@ class RecommendationsRequest(BaseModel):
     budgetRange: int
     tripDuration: str
     interests: List[str]
+    country: Optional[str] = None  # <-- Add country field
     additionalNotes: Optional[str] = None
 
     @field_validator('ageGroup')
@@ -474,7 +482,7 @@ def check_rate_limit(client_ip: str):
     request_counts[client_ip].append(now)
 
 # OpenAI Destination Generation
-async def generate_destinations_with_openai(continent: Optional[str] = None, limit: int = 6) -> List[dict]:
+async def generate_destinations_with_openai(continent: Optional[str] = None, limit: int = 50) -> List[dict]:
     """Generate destination data using OpenAI API"""
     try:
         # Create a comprehensive prompt for destination generation
@@ -507,6 +515,14 @@ Format as a valid JSON array with these exact fields:
 
 Make destinations diverse, exciting, and realistic. Include popular and hidden gems from all continents. Ensure the JSON is properly formatted with no trailing commas.
 
+IMPORTANT: Generate exactly {limit} destinations. Include a mix of:
+- Major cities (Paris, Tokyo, New York, London, etc.)
+- Natural wonders (Grand Canyon, Niagara Falls, Mount Fuji, etc.)
+- Beach destinations (Maldives, Bali, Santorini, etc.)
+- Cultural sites (Machu Picchu, Petra, Angkor Wat, etc.)
+- Adventure destinations (Patagonia, Swiss Alps, New Zealand, etc.)
+- Hidden gems and emerging destinations
+
 Example format:
 [
   {{
@@ -536,6 +552,9 @@ Example format:
         
         # Parse the response
         content = response.choices[0].message.content
+        if content is None:
+            raise Exception("OpenAI returned empty content")
+        content = content.strip()
         if not content:
             logger.warning("OpenAI returned empty content")
             return []
@@ -546,8 +565,22 @@ Example format:
         import json
         import re
         
+        # Clean the content - remove markdown code blocks and fix common JSON issues
+        cleaned_content = content.strip() if content is not None else ""
+        if cleaned_content.startswith('```json'):
+            cleaned_content = cleaned_content[7:]
+        if cleaned_content.startswith('```'):
+            cleaned_content = cleaned_content[3:]
+        if cleaned_content.endswith('```'):
+            cleaned_content = cleaned_content[:-3]
+        cleaned_content = cleaned_content.strip()
+        
+        # Fix common JSON formatting issues
+        cleaned_content = re.sub(r',\s*}', '}', cleaned_content)  # Remove trailing commas
+        cleaned_content = re.sub(r',\s*]', ']', cleaned_content)  # Remove trailing commas in arrays
+        
         # First, try to find JSON array in the response
-        json_match = re.search(r'\[.*\]', content, re.DOTALL)
+        json_match = re.search(r'\[.*\]', cleaned_content, re.DOTALL) if cleaned_content else None
         if json_match:
             try:
                 destinations_data = json.loads(json_match.group())
@@ -572,16 +605,19 @@ Example format:
                 return destinations_data
             except json.JSONDecodeError as e:
                 logger.warning(f"Could not parse JSON from OpenAI response: {e}")
+                logger.debug(f"JSON content: {json_match.group()[:500]}...")
         
         # If JSON parsing failed, try to extract individual destinations
         try:
-            # Look for individual destination objects
-            dest_matches = re.findall(r'\{[^{}]*"name"[^{}]*\}', content, re.DOTALL)
+            # Look for individual destination objects with more flexible pattern
+            dest_matches = re.findall(r'\{[^{}]*(?:"name"[^{}]*)[^{}]*\}', cleaned_content, re.DOTALL) if cleaned_content else []
             if dest_matches:
                 destinations_data = []
                 for match in dest_matches:
                     try:
-                        dest = json.loads(match)
+                        # Clean the individual object
+                        clean_match = re.sub(r',\s*}', '}', match)
+                        dest = json.loads(clean_match)
                         dest['id'] = str(uuid.uuid4())
                         if 'image_url' not in dest:
                             dest['image_url'] = f"https://images.unsplash.com/photo-{uuid.uuid4().hex[:8]}?w=800&h=600&fit=crop"
@@ -594,7 +630,8 @@ Example format:
                         if 'highlights' not in dest:
                             dest['highlights'] = ["Local Attractions", "Cultural Sites", "Natural Beauty", "Local Cuisine"]
                         destinations_data.append(dest)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"Failed to parse individual destination: {e}")
                         continue
                 
                 if destinations_data:
@@ -631,39 +668,9 @@ async def options_handler(full_path: str):
     """Handle OPTIONS requests for CORS preflight"""
     return {"message": "OK"}
 
-@app.get("/health")
-async def health_check():
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "services": {
-            "supabase": supabase is not None
-        },
-        "details": {
-            "supabase_initialized": supabase is not None,
-            "supabase_connected": False,
-            "supabase_error": None
-        }
-    }
-    
-    # Check Supabase connection
-    if supabase:
-        try:
-            # Simple query to test connection
-            result = supabase.table("destinations").select("id").limit(1).execute()
-            health_status["services"]["supabase"] = True
-            health_status["details"]["supabase_connected"] = True
-            health_status["details"]["destinations_count"] = len(result.data) if result.data else 0
-        except Exception as e:
-            logger.error(f"Supabase health check failed: {e}")
-            health_status["services"]["supabase"] = False
-            health_status["details"]["supabase_connected"] = False
-            health_status["details"]["supabase_error"] = str(e)
-            health_status["status"] = "degraded"
-    else:
-        health_status["details"]["supabase_error"] = "Supabase client not initialized"
-    
-    return health_status
+@app.get("/api/health")
+async def api_health_check():
+    return {"status": "ok"}
 
 @app.get("/api/test-hotels")
 async def test_hotels():
@@ -841,10 +848,29 @@ async def upload_photo(
 @app.get("/api/destinations")
 async def get_destinations(
     continent: Optional[str] = None, 
-    limit: int = 50
+    limit: int = 50,
+    randomize: bool = True
 ):
     try:
-        # First try to get from database
+        # Always use OpenAI to generate fresh destinations for better variety
+        try:
+            openai_destinations = await generate_destinations_with_openai(continent, limit)
+            
+            if openai_destinations:
+                logger.info(f"Generated {len(openai_destinations)} destinations with OpenAI")
+                return {
+                    "success": True,
+                    "data": openai_destinations,
+                    "count": len(openai_destinations),
+                    "continent": continent,
+                    "limit": limit,
+                    "source": "openai",
+                    "generated_at": datetime.now().isoformat()
+                }
+        except Exception as e:
+            logger.error(f"OpenAI generation failed: {e}")
+        
+        # Fallback to database if OpenAI fails
         if supabase:
             try:
                 query = supabase.table("destinations").select("*")
@@ -880,26 +906,9 @@ async def get_destinations(
                         "source": "database"
                     }
             except Exception as e:
-                logger.warning(f"Database query failed, using OpenAI: {e}")
+                logger.warning(f"Database query failed, using mock data: {e}")
         
-        # Use OpenAI to generate destinations
-        try:
-            openai_destinations = await generate_destinations_with_openai(continent, min(limit, 12))
-            
-            if openai_destinations:
-                logger.info(f"Generated {len(openai_destinations)} destinations with OpenAI")
-                return {
-                    "success": True,
-                    "data": openai_destinations,
-                    "count": len(openai_destinations),
-                    "continent": continent,
-                    "limit": limit,
-                    "source": "openai"
-                }
-        except Exception as e:
-            logger.error(f"OpenAI generation failed: {e}")
-        
-        # Fallback to mock data
+        # Final fallback to mock data
         mock_destinations = [
             {
                 "id": "550e8400-e29b-41d4-a716-446655440001",
@@ -1013,7 +1022,6 @@ async def get_continents():
             try:
                 result = supabase.table("destinations").select("continent").execute()
                 continents = list(set([d["continent"] for d in result.data if d["continent"]]))
-
                 # Get count for each continent
                 continent_data = []
                 for continent in continents:
@@ -1022,7 +1030,6 @@ async def get_continents():
                         "name": continent,
                         "count": len(count_result.data)
                     })
-
                 if continent_data:
                     logger.info(f"Retrieved {len(continent_data)} continents from database")
                     return {
@@ -1031,7 +1038,6 @@ async def get_continents():
                     }
             except Exception as e:
                 logger.warning(f"Database query failed, using mock data: {e}")
-        
         # Fallback to mock data
         mock_continents = [
             {"name": "Africa", "count": 1},
@@ -1041,13 +1047,11 @@ async def get_continents():
             {"name": "Oceania", "count": 1},
             {"name": "South America", "count": 1}
         ]
-        
         logger.info(f"Returning {len(mock_continents)} mock continents")
         return {
             "success": True,
             "data": mock_continents
         }
-        
     except Exception as e:
         logger.error(f"Failed to get continents: {e}")
         raise HTTPException(
@@ -1156,6 +1160,8 @@ async def generate_visualization(
             # Download the user photo to a temp file
             import tempfile, requests
             selfie_url = data.user_photo_url
+            if selfie_url is None or not selfie_url.strip():
+                raise HTTPException(status_code=400, detail="user_photo_url is required")
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_img:
                 img_resp = requests.get(selfie_url)
                 temp_img.write(img_resp.content)
@@ -1179,13 +1185,13 @@ async def generate_visualization(
             if hf_result and isinstance(hf_result, list) and len(hf_result) > 0 and isinstance(hf_result[0], dict) and 'image' in hf_result[0]:
                 # Upload the image to a public location or serve it from backend
                 # For now, return the local file path (not ideal for production)
-                result_url = f"/static/uploads/{os.path.basename(hf_result[0]['image'])}"
+                result_url = f"/static/generated/{os.path.basename(hf_result[0]['image'])}"
                 # Optionally, move/copy the file to a static directory
                 import shutil
-                static_dir = os.path.join(os.path.dirname(__file__), "static", "uploads")
+                static_dir = os.path.join(os.path.dirname(__file__), "static", "generated")
                 os.makedirs(static_dir, exist_ok=True)
                 shutil.copy(hf_result[0]['image'], os.path.join(static_dir, os.path.basename(hf_result[0]['image'])))
-                result_url = f"/static/uploads/{os.path.basename(hf_result[0]['image'])}"
+                result_url = f"/static/generated/{os.path.basename(hf_result[0]['image'])}"
             else:
                 raise Exception("No image returned from Hugging Face Space")
         except Exception as e:
@@ -1315,6 +1321,9 @@ async def generate_personalized_recommendations(
     request: Request
 ):
     """Generate personalized travel recommendations based on user preferences"""
+    import logging
+    import uuid
+    logger = logging.getLogger("uvicorn.error")
     try:
         # Rate limiting
         client_ip = get_client_ip(request)
@@ -1324,50 +1333,9 @@ async def generate_personalized_recommendations(
         
         # Create comprehensive prompt for OpenAI
         interests_text = ", ".join(data.interests)
+        country_text = f" The user's selected country is: {data.country}." if data.country else ""
         additional_context = f" Additional notes: {data.additionalNotes}" if data.additionalNotes else ""
-        
-        prompt = f"""Generate personalized travel recommendations for a {data.ageGroup} age group traveling as {data.groupSize} with a budget of ${data.budgetRange} for a {data.tripDuration} trip. Their interests include: {interests_text}.{additional_context}
-
-Please provide a comprehensive response including:
-
-1. 3-5 recommended destinations with detailed descriptions
-2. A custom itinerary for the trip duration
-3. Travel tips and recommendations
-4. Budget breakdown
-
-Format the response as a valid JSON object with this exact structure:
-{{
-    "destinations": [
-        {{
-            "name": "Destination Name",
-            "country": "Country",
-            "continent": "Continent", 
-            "description": "Detailed description",
-            "rating": 4.5,
-            "price": "$$"
-        }}
-    ],
-    "itinerary": [
-        {{
-            "title": "Day Title",
-            "activities": ["Activity 1", "Activity 2", "Activity 3"]
-        }}
-    ],
-    "travelTips": [
-        "Tip 1",
-        "Tip 2", 
-        "Tip 3"
-    ],
-    "budgetBreakdown": {{
-        "accommodation": 1200,
-        "transportation": 800,
-        "food": 600,
-        "activities": 400,
-        "total": 3000
-    }}
-}}
-
-Make the recommendations realistic, exciting, and tailored to the specific preferences. Consider the age group, group size, budget, and interests when making suggestions."""
+        prompt = f"""Generate personalized travel recommendations for a {data.ageGroup} age group traveling as {data.groupSize} with a budget of ${data.budgetRange} for a {data.tripDuration} trip. The user's selected interests are: {interests_text}.{country_text}{additional_context}\n\nIMPORTANT: Tailor the recommended destinations, activities, and itinerary to match the user's interests and country as closely as possible. The interests and country are the most important factors for your suggestions.\n\nPlease provide a comprehensive response including:\n\n1. 10 recommended destinations with detailed descriptions and high-quality image URLs\n2. A custom itinerary for the trip duration\n3. Travel tips and recommendations\n4. Budget breakdown\n\nFormat the response as a valid JSON object with this exact structure:\n{{\n    "destinations": [ ... ],\n    "itinerary": [ ... ],\n    "travelTips": [ ... ],\n    "budgetBreakdown": {{ ... }}\n}}\n\nFor each destination, include:\n- id (unique identifier)\n- name (destination name)\n- country\n- description (2-3 sentences)\n- image_url (use high-quality Unsplash URLs like: https://images.unsplash.com/photo-[ID]?w=800&h=600&fit=crop)\n- rating (4.0-5.0)\n- price ($, $$, or $$$)\n- highlights (array of 4 key attractions)\n\nMake the recommendations realistic, exciting, and tailored to the specific preferences. Consider the age group, group size, budget, country, and especially the interests when making suggestions."""
 
         # Call OpenAI API
         response = openai_client.chat.completions.create(
@@ -1379,117 +1347,72 @@ Make the recommendations realistic, exciting, and tailored to the specific prefe
             max_tokens=2500,
             temperature=0.7
         )
-        
         # Parse the response
         content = response.choices[0].message.content
+        logger.info(f"Raw OpenAI response: {content}")
+        if content is None:
+            raise Exception("OpenAI returned empty content")
+        content = content.strip()
         if not content:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to generate recommendations"
             )
-        
-        # Try to extract JSON from the response
-        try:
-            # Find JSON content in the response
-            start_idx = content.find('{')
-            end_idx = content.rfind('}') + 1
-            
-            if start_idx == -1 or end_idx == 0:
-                raise ValueError("No JSON found in response")
-            
-            json_content = content[start_idx:end_idx]
-            import json
-            recommendations = json.loads(json_content)
-            
-            # Validate the structure
-            required_keys = ['destinations', 'itinerary', 'travelTips', 'budgetBreakdown']
-            for key in required_keys:
-                if key not in recommendations:
-                    raise ValueError(f"Missing required key: {key}")
-            
-            logger.info(f"Successfully generated recommendations with {len(recommendations.get('destinations', []))} destinations")
-            
-            return {
-                "success": True,
-                "data": recommendations,
-                "generated_at": datetime.now().isoformat()
-            }
-            
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Failed to parse OpenAI response: {e}")
-            logger.error(f"Raw response: {content}")
-            
-            # Return fallback recommendations
-            fallback_recommendations = {
-                "destinations": [
-                    {
-                        "name": "Bali, Indonesia",
-                        "country": "Indonesia",
-                        "continent": "Asia",
-                        "description": "Perfect for relaxation and cultural experiences with beautiful beaches and temples.",
-                        "rating": 4.5,
-                        "price": "$$"
-                    },
-                    {
-                        "name": "Barcelona, Spain",
-                        "country": "Spain", 
-                        "continent": "Europe",
-                        "description": "Great for food, culture, and architecture with vibrant nightlife.",
-                        "rating": 4.3,
-                        "price": "$$"
-                    },
-                    {
-                        "name": "Costa Rica",
-                        "country": "Costa Rica",
-                        "continent": "North America", 
-                        "description": "Ideal for adventure and nature with rainforests and beaches.",
-                        "rating": 4.4,
-                        "price": "$$"
-                    }
-                ],
-                "itinerary": [
-                    {
-                        "title": "Day 1: Arrival and Exploration",
-                        "activities": ["Check into hotel", "Local market visit", "Welcome dinner"]
-                    },
-                    {
-                        "title": "Day 2: Cultural Immersion", 
-                        "activities": ["Museum visit", "Local cooking class", "Evening entertainment"]
-                    },
-                    {
-                        "title": "Day 3: Adventure Day",
-                        "activities": ["Outdoor activity", "Scenic viewpoints", "Relaxation time"]
-                    }
-                ],
-                "travelTips": [
-                    "Book accommodations in advance for better rates",
-                    "Pack according to the local climate",
-                    "Learn basic local phrases for better experience",
-                    "Keep copies of important documents"
-                ],
-                "budgetBreakdown": {
-                    "accommodation": int(data.budgetRange * 0.4),
-                    "transportation": int(data.budgetRange * 0.25),
-                    "food": int(data.budgetRange * 0.2),
-                    "activities": int(data.budgetRange * 0.15),
-                    "total": data.budgetRange
+        # Clean up markdown code blocks if present
+        if content.startswith('```json'):
+            content = content[7:]
+        if content.startswith('```'):
+            content = content[3:]
+        content = content.strip('`\n ')
+        # Try to extract JSON from the response using regex
+        import re, json
+        json_match = re.search(r'\{.*\}', content, re.DOTALL)
+        if json_match:
+            json_content = json_match.group()
+            try:
+                recommendations = json.loads(json_content)
+                # Validate the structure
+                required_keys = ['destinations', 'itinerary', 'travelTips', 'budgetBreakdown']
+                for key in required_keys:
+                    if key not in recommendations:
+                        raise ValueError(f"Missing required key: {key}")
+                # Ensure all destinations have a unique id and image_url
+                destinations = recommendations.get('destinations', [])
+                for dest in destinations:
+                    if not dest.get('id'):
+                        dest['id'] = str(uuid.uuid4())
+                    # Ensure each destination has a proper image_url
+                    if not dest.get('image_url') or not dest['image_url'].startswith('http'):
+                        # Generate a fallback Unsplash URL based on destination name
+                        dest_name = dest.get('name', 'travel').replace(' ', '-').lower()
+                        dest['image_url'] = f"https://images.unsplash.com/photo-{uuid.uuid4().hex[:8]}?w=800&h=600&fit=crop&query={dest_name}"
+                    # Ensure other required fields
+                    if 'rating' not in dest:
+                        dest['rating'] = 4.5
+                    if 'price' not in dest:
+                        dest['price'] = "$$"
+                    if 'highlights' not in dest:
+                        dest['highlights'] = ["Local Attractions", "Cultural Sites", "Natural Beauty", "Local Cuisine"]
+                logger.info(f"Successfully generated recommendations with {len(destinations)} destinations")
+                return {
+                    "success": True,
+                    "data": recommendations,
+                    "generated_at": datetime.now().isoformat()
                 }
-            }
-            
-            return {
-                "success": True,
-                "data": fallback_recommendations,
-                "generated_at": datetime.now().isoformat(),
-                "note": "Used fallback recommendations due to API parsing issue"
-            }
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Personalized recommendations error: {e}")
+            except Exception as e:
+                logger.error(f"Failed to parse OpenAI JSON: {e}")
+                logger.error(f"Raw JSON content: {json_content}")
+        else:
+            logger.error(f"No JSON found in OpenAI response: {content}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate personalized recommendations: {str(e)}"
+            detail="Failed to parse recommendations from OpenAI"
+        )
+    except Exception as e:
+        logger.error(f"Error generating personalized recommendations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate recommendations: {str(e)}"
         )
 
 @app.post("/api/generate-text-to-image")
@@ -1796,60 +1719,71 @@ async def get_destination_suggestions(
             if not openai_client.api_key:
                 raise Exception("OpenAI API key not configured")
             
-            prompt = f"""Given the user input "{query}", suggest 8 popular travel destinations (cities, countries, or regions) that match or are related to this query. 
+            prompt = f"""Given the user input "{query}", suggest 12 popular travel destinations (cities, countries, regions, landmarks, or natural wonders) that match or are related to this query. 
 
 Return only a JSON array of strings with destination names in this exact format:
 ["Destination 1", "Destination 2", "Destination 3", ...]
 
-Examples:
-- For "par" → ["Paris, France", "Barcelona, Spain", "Milan, Italy", "Bangkok, Thailand", "Mumbai, India", "Buenos Aires, Argentina", "Cairo, Egypt", "Osaka, Japan"]
-- For "tok" → ["Tokyo, Japan", "Toronto, Canada", "Stockholm, Sweden", "Istanbul, Turkey", "Bangkok, Thailand", "Moscow, Russia", "Seoul, South Korea", "Melbourne, Australia"]
-- For "beach" → ["Bali, Indonesia", "Maldives", "Hawaii, USA", "Santorini, Greece", "Phuket, Thailand", "Cancun, Mexico", "Fiji", "Seychelles"]
+Include a mix of:
+- Major cities and capitals
+- Popular tourist destinations
+- Natural wonders and landmarks
+- Countries and regions
+- Beach destinations
+- Cultural sites
+- Adventure destinations
 
-Focus on popular, well-known destinations that travelers would actually search for."""
+Examples:
+- For "par" → ["Paris, France", "Barcelona, Spain", "Milan, Italy", "Bangkok, Thailand", "Mumbai, India", "Buenos Aires, Argentina", "Cairo, Egypt", "Osaka, Japan", "Park City, USA", "Paros, Greece", "Paraguay", "Patagonia"]
+- For "tok" → ["Tokyo, Japan", "Toronto, Canada", "Stockholm, Sweden", "Istanbul, Turkey", "Bangkok, Thailand", "Moscow, Russia", "Seoul, South Korea", "Melbourne, Australia", "Toulouse, France", "Toledo, Spain", "Tuscany, Italy", "Tahiti"]
+- For "beach" → ["Bali, Indonesia", "Maldives", "Hawaii, USA", "Santorini, Greece", "Phuket, Thailand", "Cancun, Mexico", "Fiji", "Seychelles", "Bora Bora", "Maui, Hawaii", "Gold Coast, Australia", "Copacabana, Brazil"]
+- For "mountain" → ["Swiss Alps", "Rocky Mountains", "Mount Fuji", "Himalayas", "Andes", "Alps", "Mount Kilimanjaro", "Banff National Park", "Patagonia", "Yosemite", "Matterhorn", "Mount Everest"]
+
+Focus on popular, well-known destinations that travelers would actually search for. Be creative and include diverse options."""
             
             response = openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.7
+                max_tokens=300,
+                temperature=0.8
             )
             
             content = response.choices[0].message.content
-            if content:
-                content = content.strip()
-            else:
-                logger.warning("OpenAI returned empty content")
-                return {"suggestions": []}
+            if content is None:
+                raise Exception("OpenAI returned empty content")
+            content = content.strip()
             
             # Parse JSON response
             import json
             import re
             
             # Extract JSON array from response
-            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            json_match = re.search(r'\[.*\]', content, re.DOTALL) if content else None
             if json_match:
                 suggestions = json.loads(json_match.group())
                 logger.info(f"OpenAI suggestions: {suggestions}")
-                return {"suggestions": suggestions[:8]}
+                return {"suggestions": suggestions[:12]}
             else:
                 raise Exception("Invalid JSON response from OpenAI")
                 
         except Exception as openai_error:
             logger.warning(f"OpenAI suggestions failed: {openai_error}")
             
-            # Fallback to static suggestions
+            # Enhanced fallback to static suggestions
             static_suggestions = {
-                'par': ['Paris, France', 'Barcelona, Spain', 'Milan, Italy', 'Bangkok, Thailand'],
-                'tok': ['Tokyo, Japan', 'Toronto, Canada', 'Stockholm, Sweden', 'Istanbul, Turkey'],
-                'lon': ['London, UK', 'Los Angeles, USA', 'Lyon, France', 'Lima, Peru'],
-                'new': ['New York, USA', 'New Delhi, India', 'Newcastle, UK', 'New Orleans, USA'],
-                'san': ['San Francisco, USA', 'Santorini, Greece', 'Santiago, Chile', 'San Diego, USA'],
-                'dub': ['Dubai, UAE', 'Dublin, Ireland', 'Dubrovnik, Croatia', 'Durban, South Africa'],
-                'bea': ['Bali, Indonesia', 'Barcelona, Spain', 'Bangkok, Thailand', 'Berlin, Germany'],
-                'rom': ['Rome, Italy', 'Roma, Italy', 'Romania', 'Romantic destinations'],
-                'sea': ['Seattle, USA', 'Seoul, South Korea', 'Seattle, USA', 'Seville, Spain'],
-                'chi': ['Chicago, USA', 'China', 'Chile', 'Chiang Mai, Thailand']
+                'par': ['Paris, France', 'Barcelona, Spain', 'Milan, Italy', 'Bangkok, Thailand', 'Park City, USA', 'Paros, Greece'],
+                'tok': ['Tokyo, Japan', 'Toronto, Canada', 'Stockholm, Sweden', 'Istanbul, Turkey', 'Toulouse, France', 'Toledo, Spain'],
+                'lon': ['London, UK', 'Los Angeles, USA', 'Lyon, France', 'Lima, Peru', 'Long Beach, USA', 'Lombok, Indonesia'],
+                'new': ['New York, USA', 'New Delhi, India', 'Newcastle, UK', 'New Orleans, USA', 'New Zealand', 'Newfoundland, Canada'],
+                'san': ['San Francisco, USA', 'Santorini, Greece', 'Santiago, Chile', 'San Diego, USA', 'San Antonio, USA', 'San Jose, Costa Rica'],
+                'dub': ['Dubai, UAE', 'Dublin, Ireland', 'Dubrovnik, Croatia', 'Durban, South Africa', 'Dubai Marina', 'Dublin Castle'],
+                'bea': ['Bali, Indonesia', 'Barcelona, Spain', 'Bangkok, Thailand', 'Berlin, Germany', 'Beach destinations', 'Beirut, Lebanon'],
+                'rom': ['Rome, Italy', 'Roma, Italy', 'Romania', 'Romantic destinations', 'Rome, Georgia', 'Roman Colosseum'],
+                'sea': ['Seattle, USA', 'Seoul, South Korea', 'Seville, Spain', 'Seaside destinations', 'Serengeti, Tanzania', 'Seychelles'],
+                'chi': ['Chicago, USA', 'China', 'Chile', 'Chiang Mai, Thailand', 'Chichen Itza, Mexico', 'Chamonix, France'],
+                'mou': ['Mount Fuji, Japan', 'Mount Everest', 'Mountain destinations', 'Moscow, Russia', 'Mumbai, India', 'Munich, Germany'],
+                'bea': ['Beach destinations', 'Bali, Indonesia', 'Barcelona, Spain', 'Bangkok, Thailand', 'Berlin, Germany', 'Beirut, Lebanon'],
+                'is': ['Istanbul, Turkey', 'Island destinations', 'Israel', 'Isle of Skye, Scotland', 'Isla Mujeres, Mexico', 'Ischia, Italy']
             }
             
             # Find matching suggestions
@@ -1864,11 +1798,14 @@ Focus on popular, well-known destinations that travelers would actually search f
                 popular_destinations = [
                     'Paris, France', 'Tokyo, Japan', 'New York, USA', 'London, UK',
                     'Barcelona, Spain', 'Rome, Italy', 'Bali, Indonesia', 'Dubai, UAE',
-                    'Singapore', 'Sydney, Australia', 'Amsterdam, Netherlands', 'Prague, Czech Republic'
+                    'Singapore', 'Sydney, Australia', 'Amsterdam, Netherlands', 'Prague, Czech Republic',
+                    'Machu Picchu, Peru', 'Petra, Jordan', 'Angkor Wat, Cambodia', 'Taj Mahal, India',
+                    'Grand Canyon, USA', 'Niagara Falls', 'Mount Fuji, Japan', 'Swiss Alps',
+                    'Maldives', 'Hawaii, USA', 'Santorini, Greece', 'Phuket, Thailand'
                 ]
                 suggestions = [dest for dest in popular_destinations if query.lower() in dest.lower()]
             
-            return {"suggestions": suggestions[:8]}
+            return {"suggestions": suggestions[:12]}
     
     except Exception as e:
         logger.error(f"Destination suggestions failed: {e}")
@@ -2080,18 +2017,16 @@ Return as JSON array with these exact fields:
             )
             
             content = response.choices[0].message.content
-            if content:
-                content = content.strip()
-            else:
-                logger.warning("OpenAI returned empty content")
-                return {"results": [], "provider": "fallback"}
+            if content is None:
+                raise Exception("OpenAI returned empty content")
+            content = content.strip()
             
             # Parse JSON response
             import json
             import re
             
             # Extract JSON array from response
-            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            json_match = re.search(r'\[.*\]', content, re.DOTALL) if content else None
             if json_match:
                 results = json.loads(json_match.group())
                 logger.info(f"OpenAI {data.search_type} results: {len(results)} items")
@@ -2376,6 +2311,9 @@ async def search_flights(
                 "provider": "Mock Data (Invalid airport codes)"
             }
         
+        # Log the cleaned airport codes
+        logger.info(f"Using airport codes: {data.origin} -> {data.destination}")
+        
         # Validate dates
         try:
             from datetime import datetime
@@ -2454,6 +2392,8 @@ async def search_flights(
             
         except ResponseError as e:
             logger.error(f"Amadeus API error: {e}")
+            logger.error(f"Amadeus error details: {e.description if hasattr(e, 'description') else 'No description'}")
+            logger.error(f"Amadeus error code: {e.code if hasattr(e, 'code') else 'No code'}")
             # Return mock data instead of throwing an error
             return {
                 "success": True,
@@ -2607,12 +2547,21 @@ def generate_ai_image(selfie_path: Path, prompt: str) -> list[str]:
     
     # Use the new Hugging Face token
     token = os.getenv("HUGGINGFACE_TOKEN")
+    logger.info(f"Using Hugging Face token (first 8 chars): {token[:8] if token else 'None'}")
+    
+    # Check if we have a valid token
+    if not token or token == "your_huggingface_token_here":
+        logger.warning("No valid Hugging Face token found, using fallback")
+        return generate_fallback_images(prompt)
     
     try:
+        logger.info("Attempting to use Hugging Face API for image generation")
         client = Client("multimodalart/Ip-Adapter-FaceID", hf_token=token)
+        
+        # Set a longer timeout for the prediction
         result = client.predict(
             images=[handle_file(str(selfie_path))],
-            prompt=prompt if prompt else "",
+            prompt=prompt if prompt else "A person enjoying a beautiful travel destination",
             negative_prompt="",
             preserve_face_structure=True,
             face_strength=1.3,
@@ -2620,12 +2569,15 @@ def generate_ai_image(selfie_path: Path, prompt: str) -> list[str]:
             nfaa_negative_prompt="naked, bikini, skimpy, scanty, bare skin, lingerie, swimsuit, exposed, see-through",
             api_name="/generate_image"
         )
+        
         if not result or not isinstance(result, list) or len(result) == 0:
             raise ValueError("Unexpected response structure from Hugging Face")
+        
         image_urls = []
-        uploads_dir = Path(__file__).parent / "static" / "uploads"
+        uploads_dir = Path(__file__).parent / "backend" / "static" / "uploads"
         uploads_dir.mkdir(exist_ok=True)
         timestamp = int(time.time())
+        
         for i, item in enumerate(result):
             if item and isinstance(item, dict) and "image" in item and item["image"]:
                 image_path = item["image"]
@@ -2633,20 +2585,25 @@ def generate_ai_image(selfie_path: Path, prompt: str) -> list[str]:
                 dest_path = uploads_dir / dest_filename
                 shutil.copy(image_path, dest_path)
                 image_urls.append(f"/static/uploads/{dest_filename}")
+        
         if not image_urls:
             raise ValueError("No images found in result")
+        
+        logger.info(f"Successfully generated {len(image_urls)} images with Hugging Face")
         return image_urls
+        
     except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Hugging Face API error: {error_msg}")
-        
-        # Check if it's an authentication error
-        if "401" in error_msg or "Unauthorized" in error_msg or "Invalid credentials" in error_msg:
-            logger.warning("Hugging Face token is invalid or expired, using fallback")
-            return generate_fallback_images(prompt)
-        
-        # For other errors, try fallback
-        logger.warning(f"Hugging Face API failed: {error_msg}, using fallback")
+        import traceback
+        logger.error(f"Hugging Face API error: {e}")
+        logger.error(traceback.format_exc())
+        # Check for specific error types
+        if any(keyword in str(e).lower() for keyword in [
+            "401", "unauthorized", "invalid credentials", "token", "authentication",
+            "upstream gradio app has raised an exception", "timeout", "connection"
+        ]):
+            logger.warning("Hugging Face API failed due to authentication or connection issues, using fallback")
+        else:
+            logger.warning(f"Hugging Face API failed with error: {e}, using fallback")
         return generate_fallback_images(prompt)
 
 def generate_fallback_images(prompt: str) -> list[str]:
@@ -2667,12 +2624,20 @@ def generate_fallback_images(prompt: str) -> list[str]:
 def generate_dalle_images(prompt: str) -> list[str]:
     """Generate images using DALL-E API"""
     try:
+        # Check if we have a valid OpenAI key
+        openai_key = os.getenv("OPENAI_API_KEY")
+        if not openai_key or openai_key == "your_openai_api_key_here":
+            logger.warning("No valid OpenAI key found, using mock images")
+            return generate_mock_images(prompt)
+        
         # Create a travel-themed prompt if the original is empty
         if not prompt or prompt.strip() == "":
             prompt = "A person enjoying a beautiful travel destination, high quality, photorealistic"
         else:
             # Enhance the prompt for better results
             prompt = f"A person enjoying {prompt}, high quality, photorealistic, travel photography"
+        
+        logger.info(f"Generating DALL-E image with prompt: {prompt}")
         
         response = openai_client.images.generate(
             model="dall-e-3",
@@ -2685,40 +2650,37 @@ def generate_dalle_images(prompt: str) -> list[str]:
         if response.data and len(response.data) > 0:
             image_url = response.data[0].url
             if not image_url:
-                raise Exception("DALL-E API returned no valid image URL")
+                logger.error("DALL-E API returned empty image URL")
+                raise Exception("DALL-E API returned empty image URL")
             
             # Download and save the image
-            uploads_dir = Path(__file__).parent / "static" / "uploads"
+            uploads_dir = Path(__file__).parent / "backend" / "static" / "uploads"
             uploads_dir.mkdir(exist_ok=True)
             
             # Download the image
-            img_response = requests.get(image_url)
+            img_response = requests.get(image_url, timeout=30)
             if img_response.status_code == 200:
                 filename = f"dalle_generated_{int(time.time())}.png"
                 filepath = uploads_dir / filename
                 with open(filepath, "wb") as f:
                     f.write(img_response.content)
+                logger.info(f"Successfully generated DALL-E image: {filename}")
                 return [f"/static/uploads/{filename}"]
+            else:
+                logger.error(f"Failed to download DALL-E image: {img_response.status_code}")
         
         raise Exception("DALL-E API returned no images")
     except Exception as e:
         logger.error(f"DALL-E generation failed: {e}")
-        raise
+        # Don't raise, return mock images instead
+        return generate_mock_images(prompt)
 
 def generate_mock_images(prompt: str) -> list[str]:
     """Generate mock travel images using Unsplash"""
     try:
-        # Create a search query based on the prompt
-        if not prompt or prompt.strip() == "":
-            search_query = "travel"
-        else:
-            # Extract key words from prompt for search
-            words = prompt.lower().split()
-            travel_keywords = ["travel", "vacation", "trip", "destination", "beach", "mountain", "city", "landscape"]
-            search_terms = [word for word in words if word in travel_keywords]
-            search_query = " ".join(search_terms) if search_terms else "travel"
+        logger.info("Generating mock travel images")
         
-        # Use Unsplash API or direct URLs for mock images
+        # Use reliable Unsplash URLs for mock images
         mock_images = [
             "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=600&fit=crop&q=80",
             "https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=800&h=600&fit=crop&q=80",
@@ -2726,30 +2688,39 @@ def generate_mock_images(prompt: str) -> list[str]:
         ]
         
         # Download and save mock images
-        uploads_dir = Path(__file__).parent / "static" / "uploads"
+        uploads_dir = Path(__file__).parent / "backend" / "static" / "uploads"
         uploads_dir.mkdir(exist_ok=True)
         
         image_urls = []
+        # Filter out None values and ensure all URLs are strings
+        mock_images = [str(url) for url in mock_images if url is not None]
+        
         for i, mock_url in enumerate(mock_images):
             try:
-                img_response = requests.get(mock_url)
+                if not mock_url:
+                    logger.warning(f"Skipping empty mock URL at index {i}")
+                    continue
+                img_response = requests.get(mock_url, timeout=10)
                 if img_response.status_code == 200:
                     filename = f"mock_generated_{i+1}_{int(time.time())}.jpg"
                     filepath = uploads_dir / filename
                     with open(filepath, "wb") as f:
                         f.write(img_response.content)
                     image_urls.append(f"/static/uploads/{filename}")
+                    logger.info(f"Successfully downloaded mock image {i+1}: {filename}")
             except Exception as e:
                 logger.error(f"Failed to download mock image {i+1}: {e}")
                 continue
         
         if not image_urls:
             # If all downloads fail, return placeholder URLs
+            logger.warning("All mock image downloads failed, returning placeholder URLs")
             return [
                 "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=600&fit=crop&q=80",
                 "https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=800&h=600&fit=crop&q=80"
             ]
         
+        logger.info(f"Successfully generated {len(image_urls)} mock images")
         return image_urls
     except Exception as e:
         logger.error(f"Mock image generation failed: {e}")
@@ -2758,27 +2729,994 @@ def generate_mock_images(prompt: str) -> list[str]:
             "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=600&fit=crop&q=80",
             "https://images.unsplash.com/photo-1469474968028-56623f02e42e?w=800&h=600&fit=crop&q=80"
         ]
-
+# --- Begin: Prompt Enhancement for IP-Adapter ---
+def enhance_prompt_with_openai(user_prompt: str) -> str:
+    """Enhance a user prompt for photorealistic AI image generation using OpenAI GPT."""
+    try:
+        system_prompt = (
+            "You are an expert at creating prompts for AI face swap image generation. "
+            "Rewrite the user's prompt to focus on the PERSON and their FACE being in the scene, "
+            "while keeping the travel destination as background context. "
+            "The goal is to show the person's face clearly in the travel setting. "
+            "Use phrases like 'a person with their face clearly visible', 'showing the person's face', "
+            "'the person's face is prominent, as well as the background details are important', etc. "
+            "Keep it under 200 words and focus on the person first, then the location."
+        )
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=150,
+            temperature=0.7
+        )
+        enhanced = response.choices[0].message.content.strip() if response.choices[0].message.content else user_prompt
+        logger.info(f"Enhanced prompt: {enhanced}")
+        return enhanced
+    except Exception as e:
+        logger.error(f"Prompt enhancement failed: {e}")
+        return user_prompt  # Fallback to original prompt
+# --- End: Prompt Enhancement for IP-Adapter ---
 @app.post("/api/generate-photo-app-image")
 async def generate_photo_app_image(
     selfie: UploadFile = File(...),
     prompt: str = Form(...)
 ):
     try:
-        uploads_dir = Path(__file__).parent / "static" / "uploads"
+        uploads_dir = Path(__file__).parent / "backend" / "static" / "uploads"
         uploads_dir.mkdir(exist_ok=True)
         filename = selfie.filename or "uploaded.jpg"
         upload_path = uploads_dir / filename
         with open(upload_path, "wb") as buffer:
             shutil.copyfileobj(selfie.file, buffer)
         safe_prompt = prompt.strip() if prompt is not None and isinstance(prompt, str) else ""
-        image_urls = generate_ai_image(upload_path, safe_prompt)
+         # Enhance the prompt using OpenAI before sending to IP-Adapter
+        enhanced_prompt = enhance_prompt_with_openai(safe_prompt)
+        image_urls = generate_ai_image(upload_path, enhanced_prompt)
         return {"success": True, "image_urls": image_urls}
     except Exception as e:
         import traceback
         traceback.print_exc()
         return {"success": False, "error": str(e)}
 # --- End: AI Photo App Integration ---
+
+# New OpenAI-powered endpoints for the enhanced travel planner
+
+class ContinentGenerationRequest(BaseModel):
+    prompt: str
+
+class CountryGenerationRequest(BaseModel):
+    continent: str
+    prompt: str
+
+class CityGenerationRequest(BaseModel):
+    country: str
+    prompt: str
+
+class AreaGenerationRequest(BaseModel):
+    city: str
+    prompt: str
+
+class ItineraryGenerationRequest(BaseModel):
+    destinationId: str
+    preferences: dict
+    prompt: str
+
+class ImageGenerationRequest(BaseModel):
+    destinationId: str
+    userPhotoUrl: str
+    prompt: str
+
+class RecommendationsGenerationRequest(BaseModel):
+    preferences: dict
+    prompt: str
+
+class DestinationFilterRequest(BaseModel):
+    criteria: dict
+    prompt: str
+
+class DestinationImagesRequest(BaseModel):
+    destinations: List[dict]
+    prompt: str
+
+@app.post("/api/generate-continents")
+async def generate_continents(
+    data: ContinentGenerationRequest,
+    request: Request
+):
+    """Generate continents using OpenAI API"""
+    try:
+        client_ip = get_client_ip(request)
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please try again later."
+            )
+
+        # Use OpenAI to generate continent data
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a travel expert. Generate detailed continent information in JSON format."
+                },
+                {
+                    "role": "user",
+                    "content": data.prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=2000
+        )
+
+        # Parse the response and extract continent data
+        content = response.choices[0].message.content
+        # Extract JSON from the response
+        import json
+        import re
+        
+        # Try to find JSON in the response
+        json_match = re.search(r'\{.*\}', content if content is not None else '', re.DOTALL)
+        if json_match:
+            continent_data = json.loads(json_match.group())
+            continents = continent_data.get('continents', [])
+        else:
+            # Fallback: generate structured data
+            continents = [
+                {
+                    "name": "Asia",
+                    "count": 48,
+                    "description": "Largest continent with diverse cultures, ancient civilizations, and modern cities",
+                    "visual_theme": "diverse landscapes and cultures"
+                },
+                {
+                    "name": "Europe", 
+                    "count": 44,
+                    "description": "Historic continent with rich culture, art, and architecture",
+                    "visual_theme": "historic cities and cultural heritage"
+                },
+                {
+                    "name": "North America",
+                    "count": 23,
+                    "description": "Vast continent with diverse landscapes from Arctic to tropical",
+                    "visual_theme": "natural wonders and modern cities"
+                },
+                {
+                    "name": "Africa",
+                    "count": 54,
+                    "description": "Continent of incredible wildlife, ancient history, and diverse cultures",
+                    "visual_theme": "wildlife and natural beauty"
+                },
+                {
+                    "name": "Oceania",
+                    "count": 14,
+                    "description": "Island continent with stunning beaches and unique wildlife",
+                    "visual_theme": "island paradise and marine life"
+                },
+                {
+                    "name": "South America",
+                    "count": 12,
+                    "description": "Continent of Amazon rainforest, Andes mountains, and vibrant cultures",
+                    "visual_theme": "rainforest and mountain landscapes"
+                },
+                {
+                    "name": "Antarctica",
+                    "count": 0,
+                    "description": "Frozen continent of pristine wilderness and scientific research",
+                    "visual_theme": "ice and snow landscapes"
+                }
+            ]
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "continents": continents,
+                "message": f"Generated {len(continents)} continents with OpenAI"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating continents: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate continents: {str(e)}"
+        )
+
+@app.post("/api/generate-countries")
+async def generate_countries(
+    data: CountryGenerationRequest,
+    request: Request
+):
+    """Generate countries for a continent using OpenAI API"""
+    try:
+        client_ip = get_client_ip(request)
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please try again later."
+            )
+
+        # Use OpenAI to generate country data
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a travel expert. Generate detailed country information in JSON format."
+                },
+                {
+                    "role": "user",
+                    "content": data.prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=3000
+        )
+
+        content = response.choices[0].message.content or ''
+        import json
+        import re
+        
+        json_match = re.search(r'\{.*\}', content if content is not None else '', re.DOTALL)
+        if json_match:
+            country_data = json.loads(json_match.group())
+            countries = country_data.get('countries', [])
+        else:
+            # Fallback data for the continent
+            continent_countries = {
+                "Asia": [
+                    {"name": "Japan", "description": "Land of the rising sun with ancient traditions and modern technology", "cities": ["Tokyo", "Kyoto", "Osaka"]},
+                    {"name": "Thailand", "description": "Land of smiles with beautiful beaches and rich culture", "cities": ["Bangkok", "Phuket", "Chiang Mai"]},
+                    {"name": "India", "description": "Incredible diversity with ancient history and vibrant culture", "cities": ["Mumbai", "Delhi", "Jaipur"]},
+                    {"name": "Vietnam", "description": "Stunning landscapes and delicious cuisine", "cities": ["Ho Chi Minh City", "Hanoi", "Da Nang"]},
+                    {"name": "South Korea", "description": "Modern cities and traditional culture", "cities": ["Seoul", "Busan", "Jeju"]}
+                ],
+                "Europe": [
+                    {"name": "France", "description": "Art, culture, and culinary excellence", "cities": ["Paris", "Lyon", "Nice"]},
+                    {"name": "Italy", "description": "Ancient history, art, and delicious food", "cities": ["Rome", "Florence", "Venice"]},
+                    {"name": "Spain", "description": "Vibrant culture, beaches, and architecture", "cities": ["Madrid", "Barcelona", "Seville"]},
+                    {"name": "Germany", "description": "Efficient cities and beautiful countryside", "cities": ["Berlin", "Munich", "Hamburg"]},
+                    {"name": "Netherlands", "description": "Windmills, tulips, and cycling culture", "cities": ["Amsterdam", "Rotterdam", "The Hague"]}
+                ]
+            }
+            countries = continent_countries.get(data.continent, [])
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "countries": countries,
+                "message": f"Generated {len(countries)} countries for {data.continent}"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating countries: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate countries: {str(e)}"
+        )
+
+@app.post("/api/generate-cities")
+async def generate_cities(
+    data: CityGenerationRequest,
+    request: Request
+):
+    """Generate cities for a country using OpenAI API"""
+    try:
+        client_ip = get_client_ip(request)
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please try again later."
+            )
+
+        # Use OpenAI to generate city data
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a travel expert. Generate detailed city information in JSON format."
+                },
+                {
+                    "role": "user",
+                    "content": data.prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=3000
+        )
+
+        content = response.choices[0].message.content or ''
+        import json
+        import re
+        
+        json_match = re.search(r'\{.*\}', content if content is not None else '', re.DOTALL)
+        if json_match:
+            city_data = json.loads(json_match.group())
+            cities = city_data.get('cities', [])
+        else:
+            # Fallback data for the country
+            country_cities = {
+                "Japan": [
+                    {"id": "tokyo", "name": "Tokyo", "description": "Modern metropolis with ancient traditions", "areas": ["Shibuya", "Shinjuku", "Harajuku"]},
+                    {"id": "kyoto", "name": "Kyoto", "description": "Ancient capital with temples and gardens", "areas": ["Gion", "Arashiyama", "Higashiyama"]},
+                    {"id": "osaka", "name": "Osaka", "description": "Food capital with vibrant nightlife", "areas": ["Dotonbori", "Namba", "Umeda"]}
+                ],
+                "France": [
+                    {"id": "paris", "name": "Paris", "description": "City of light with art and romance", "areas": ["Eiffel Tower", "Louvre", "Montmartre"]},
+                    {"id": "lyon", "name": "Lyon", "description": "Gastronomic capital of France", "areas": ["Vieux Lyon", "Presqu'île", "Croix-Rousse"]},
+                    {"id": "nice", "name": "Nice", "description": "Beautiful coastal city on the French Riviera", "areas": ["Promenade des Anglais", "Old Town", "Cimiez"]}
+                ]
+            }
+            cities = country_cities.get(data.country, [])
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "cities": cities,
+                "message": f"Generated {len(cities)} cities for {data.country}"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating cities: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate cities: {str(e)}"
+        )
+
+@app.post("/api/generate-areas")
+async def generate_areas(
+    data: AreaGenerationRequest,
+    request: Request
+):
+    """Generate areas for a city using OpenAI API"""
+    try:
+        client_ip = get_client_ip(request)
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please try again later."
+            )
+
+        # Use OpenAI to generate area data
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a travel expert. Generate detailed area information in JSON format."
+                },
+                {
+                    "role": "user",
+                    "content": data.prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=3000
+        )
+
+        content = response.choices[0].message.content or ''
+        import json
+        import re
+        
+        json_match = re.search(r'\{.*\}', content if content is not None else '', re.DOTALL)
+        if json_match:
+            area_data = json.loads(json_match.group())
+            areas = area_data.get('areas', [])
+        else:
+            # Fallback data for the city
+            city_areas = {
+                "Tokyo": [
+                    {"id": "shibuya", "name": "Shibuya", "description": "Fashion and youth culture district", "activities": ["Shopping", "People watching", "Nightlife"]},
+                    {"id": "shinjuku", "name": "Shinjuku", "description": "Business and entertainment district", "activities": ["Skyscrapers", "Golden Gai", "Shinjuku Gyoen"]},
+                    {"id": "harajuku", "name": "Harajuku", "description": "Fashion and street culture", "activities": ["Takeshita Street", "Meiji Shrine", "Yoyogi Park"]}
+                ],
+                "Paris": [
+                    {"id": "eiffel", "name": "Eiffel Tower Area", "description": "Iconic landmark and surrounding gardens", "activities": ["Eiffel Tower", "Champ de Mars", "Trocadéro"]},
+                    {"id": "louvre", "name": "Louvre District", "description": "Art and culture center", "activities": ["Louvre Museum", "Tuileries Garden", "Palais Royal"]},
+                    {"id": "montmartre", "name": "Montmartre", "description": "Artistic hilltop neighborhood", "activities": ["Sacré-Cœur", "Place du Tertre", "Moulin Rouge"]}
+                ]
+            }
+            areas = city_areas.get(data.city, [])
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "areas": areas,
+                "message": f"Generated {len(areas)} areas for {data.city}"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating areas: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate areas: {str(e)}"
+        )
+
+@app.post("/api/generate-itinerary")
+async def generate_itinerary(
+    data: ItineraryGenerationRequest,
+    request: Request
+):
+    """Generate personalized itinerary using OpenAI API"""
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+    try:
+        client_ip = get_client_ip(request)
+        logger.info(f"/api/generate-itinerary called from {client_ip} with data: {data}")
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please try again later."
+            )
+
+        # Build a fallback prompt if not provided
+        prompt = data.prompt.strip() if hasattr(data, 'prompt') and isinstance(data.prompt, str) and data.prompt.strip() else None
+        if not prompt:
+            # Build a prompt using destinationId and preferences
+            prefs = data.preferences if hasattr(data, 'preferences') else {}
+            prefs_str = ", ".join(f"{k}: {v}" for k, v in prefs.items())
+            prompt = f"Generate a detailed {len(prefs.get('tripDuration', ''))}-day itinerary for a trip to {data.destinationId}. User preferences: {prefs_str}. Include daily activities and a budget breakdown. Format as JSON with 'days' and 'budgetBreakdown'."
+            logger.info(f"Fallback prompt used: {prompt}")
+
+        # Use OpenAI to generate itinerary
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a travel expert. Generate detailed itineraries in JSON format."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=4000
+        )
+
+        content = response.choices[0].message.content
+        import json
+        import re
+        
+        json_match = re.search(r'\{.*\}', content if content is not None else '', re.DOTALL)
+        if json_match:
+            itinerary_data = json.loads(json_match.group())
+            itinerary = itinerary_data.get('itinerary', {})
+        else:
+            # Fallback itinerary
+            itinerary = {
+                "destination": data.destinationId,
+                "days": [
+                    {
+                        "title": "Day 1: Arrival and Orientation",
+                        "activities": [
+                            "Check into hotel",
+                            "Explore the local area",
+                            "Visit a local restaurant for dinner",
+                            "Rest and prepare for tomorrow"
+                        ]
+                    },
+                    {
+                        "title": "Day 2: Main Attractions",
+                        "activities": [
+                            "Visit the main landmarks",
+                            "Explore cultural sites",
+                            "Try local cuisine",
+                            "Evening entertainment"
+                        ]
+                    }
+                ]
+            }
+
+        logger.info(f"Returning itinerary for {data.destinationId}: {itinerary}")
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "itinerary": itinerary,
+                "message": f"Generated itinerary for {data.destinationId}"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating itinerary: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate itinerary: {str(e)}"
+        )
+
+@app.post("/api/generate-image")
+async def generate_image(
+    data: ImageGenerationRequest,
+    request: Request
+):
+    """Generate AI travel photo using OpenAI DALL-E"""
+    try:
+        client_ip = get_client_ip(request)
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please try again later."
+            )
+
+        # Use OpenAI DALL-E to generate image
+        response = openai_client.images.generate(
+            model="dall-e-3",
+            prompt=data.prompt,
+            size="1024x1024",
+            quality="standard",
+            n=1
+        )
+
+        image_url = response.data[0].url
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "image": {
+                    "url": image_url,
+                    "prompt": data.prompt
+                },
+                "message": "Generated AI travel photo with DALL-E"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating image: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate image: {str(e)}"
+        )
+
+@app.post("/api/generate-recommendations")
+async def generate_recommendations(
+    data: RecommendationsGenerationRequest,
+    request: Request
+):
+    """Generate personalized recommendations using OpenAI API"""
+    try:
+        client_ip = get_client_ip(request)
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please try again later."
+            )
+
+        # Use OpenAI to generate recommendations
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a travel expert. Generate personalized travel recommendations in JSON format."
+                },
+                {
+                    "role": "user",
+                    "content": data.prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=4000
+        )
+
+        content = response.choices[0].message.content
+        import json
+        import re
+        
+        json_match = re.search(r'\{.*\}', content if content is not None else '', re.DOTALL)
+        if json_match:
+            recommendations_data = json.loads(json_match.group())
+            recommendations = recommendations_data
+        else:
+            # Fallback recommendations
+            recommendations = {
+                "destinations": [
+                    {
+                        "id": "tokyo",
+                        "name": "Tokyo",
+                        "country": "Japan",
+                        "continent": "Asia",
+                        "description": "Perfect for your interests and budget",
+                        "rating": 4.8,
+                        "price": "$$$"
+                    }
+                ],
+                "itinerary": [
+                    {
+                        "title": "Day 1: Arrival",
+                        "activities": ["Check in", "Explore local area"]
+                    }
+                ]
+            }
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "recommendations": recommendations,
+                "message": "Generated personalized recommendations"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating recommendations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate recommendations: {str(e)}"
+        )
+
+@app.post("/api/filter-destinations")
+async def filter_destinations(
+    data: DestinationFilterRequest,
+    request: Request
+):
+    """Filter destinations using OpenAI API"""
+    try:
+        client_ip = get_client_ip(request)
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please try again later."
+            )
+
+        # Use OpenAI to filter destinations
+        response = openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a travel expert. Filter destinations based on criteria in JSON format."
+                },
+                {
+                    "role": "user",
+                    "content": data.prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=3000
+        )
+
+        content = response.choices[0].message.content
+        import json
+        import re
+        
+        json_match = re.search(r'\{.*\}', content if content is not None else '', re.DOTALL)
+        if json_match:
+            filter_data = json.loads(json_match.group())
+            destinations = filter_data.get('destinations', [])
+        else:
+            # Fallback filtered destinations
+            destinations = []
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "destinations": destinations,
+                "message": "Filtered destinations based on criteria"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error filtering destinations: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to filter destinations: {str(e)}"
+        )
+
+@app.post("/api/generate-destination-images")
+async def generate_destination_images(
+    data: DestinationImagesRequest,
+    request: Request
+):
+    """Generate images for destinations using OpenAI DALL-E"""
+    try:
+        client_ip = get_client_ip(request)
+        if not check_rate_limit(client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded. Please try again later."
+            )
+
+        images = {}
+        
+        # Generate images for each destination
+        for destination in data.destinations[:5]:  # Limit to 5 to avoid rate limits
+            try:
+                response = openai_client.images.generate(
+                    model="dall-e-3",
+                    prompt=f"Beautiful travel photo of {destination.get('name', 'destination')} - {data.prompt}",
+                    size="1024x1024",
+                    quality="standard",
+                    n=1
+                )
+                
+                images[destination.get('name', 'Unknown')] = response.data[0].url
+                
+                # Small delay to avoid rate limits
+                import time
+                time.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"Failed to generate image for {destination.get('name', 'Unknown')}: {e}")
+                # Use fallback image
+                images[destination.get('name', 'Unknown')] = f"https://source.unsplash.com/400x200/?{destination.get('name', 'travel')}"
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "images": images,
+                "message": f"Generated images for {len(images)} destinations"
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating destination images: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate destination images: {str(e)}"
+        )
+
+@app.post("/api/generate-detailed-itinerary")
+async def generate_detailed_itinerary(
+    data: dict,
+    request: Request
+):
+    """Generate detailed itinerary with pricing using OpenAI"""
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+    
+    try:
+        client_ip = get_client_ip(request)
+        check_rate_limit(client_ip)
+        
+        destination = data.get("destination", "Unknown")
+        duration = data.get("duration", "7 days")
+        budget_level = data.get("budget_level", "mid-range")
+        travelers = data.get("travelers", 2)
+        
+        logger.info(f"Generating detailed itinerary for {destination}, {duration}, {budget_level} budget")
+        
+        prompt = f"""Generate a comprehensive travel itinerary for {destination} for {duration} with {travelers} travelers on a {budget_level} budget.
+
+Please provide a detailed response in this exact JSON format:
+
+{{
+    "tripOverview": {{
+        "title": "Trip title",
+        "destination": "{destination}",
+        "duration": "{duration}",
+        "travelers": {travelers},
+        "bestTime": "Best time to visit",
+        "weather": "Typical weather",
+        "summary": "Brief trip summary"
+    }},
+    "dailyItinerary": [
+        {{
+            "day": 1,
+            "title": "Day title",
+            "morning": ["Activity 1", "Activity 2"],
+            "afternoon": ["Activity 3", "Activity 4"],
+            "evening": ["Activity 5", "Activity 6"],
+            "accommodation": "Hotel name",
+            "meals": ["Breakfast", "Lunch", "Dinner"],
+            "transportation": "Transport method"
+        }}
+    ],
+    "budgetBreakdown": {{
+        "accommodation": {{
+            "total": 350,
+            "perNight": 50,
+            "type": "3-star hotel",
+            "description": "Comfortable accommodation in city center"
+        }},
+        "meals": {{
+            "total": 210,
+            "perDay": 30,
+            "breakdown": {{
+                "breakfast": 8,
+                "lunch": 12,
+                "dinner": 10
+            }}
+        }},
+        "activities": {{
+            "total": 180,
+            "breakdown": {{
+                "sightseeing": 45,
+                "adventures": 80,
+                "cultural": 55
+            }}
+        }},
+        "transportation": {{
+            "total": 120,
+            "breakdown": {{
+                "airport_transfer": 25,
+                "daily_transport": 95
+            }}
+        }},
+        "miscellaneous": {{
+            "total": 50,
+            "breakdown": {{
+                "tips": 20,
+                "souvenirs": 30
+            }}
+        }},
+        "totalTripCost": 910,
+        "costPerPerson": 455,
+        "currency": "USD"
+    }},
+    "travelTips": [
+        {{
+            "category": "Packing",
+            "tips": ["Tip 1", "Tip 2", "Tip 3"]
+        }},
+        {{
+            "category": "Local Customs", 
+            "tips": ["Tip 1", "Tip 2", "Tip 3"]
+        }},
+        {{
+            "category": "Safety",
+            "tips": ["Tip 1", "Tip 2", "Tip 3"]
+        }}
+    ],
+    "accommodations": [
+        {{
+            "name": "Hotel name",
+            "type": "3-star",
+            "location": "Location",
+            "amenities": ["WiFi", "Pool", "Restaurant"],
+            "price": "50/night",
+            "rating": 4.2,
+            "pros": ["Pro 1", "Pro 2"],
+            "cons": ["Con 1", "Con 2"]
+        }}
+    ],
+    "restaurants": [
+        {{
+            "name": "Restaurant name",
+            "cuisine": "Local cuisine",
+            "specialty": "Famous dish",
+            "priceRange": "$$",
+            "location": "Location",
+            "rating": 4.5,
+            "bestDishes": ["Dish 1", "Dish 2"],
+            "reservationRequired": false
+        }}
+    ]
+}}
+
+IMPORTANT GUIDELINES:
+1. Make all prices realistic for the destination and budget level
+2. For budget level: "budget" = 60% of normal prices, "mid-range" = normal prices, "luxury" = 150% of normal prices
+3. Adjust prices based on number of travelers
+4. Include specific, realistic activities for the destination
+5. Provide practical travel tips
+6. Make accommodation and restaurant recommendations specific to the destination
+7. Ensure all costs are in USD and realistic for the destination
+8. Include seasonal considerations in pricing and recommendations"""
+
+        # Call OpenAI API
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an expert travel planner with deep knowledge of destinations worldwide. Provide accurate, realistic pricing and detailed itineraries."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=3000,
+            temperature=0.7
+        )
+        
+        content = response.choices[0].message.content
+        logger.info(f"OpenAI response received for itinerary generation")
+        
+        # Parse JSON response with better error handling
+        import re, json
+        
+        # Try to find JSON in the response
+        json_match = re.search(r'\{.*\}', content if content is not None else '', re.DOTALL)
+        
+        if json_match:
+            json_content = json_match.group()
+            
+            # Try to fix common JSON issues
+            try:
+                itinerary_data = json.loads(json_content)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Initial JSON parsing failed: {e}")
+                
+                # Try to fix trailing commas
+                json_content = re.sub(r',(\s*[}\]])', r'\1', json_content)
+                
+                # Try to fix other common issues
+                json_content = re.sub(r',\s*,', ',', json_content)  # Remove double commas
+                json_content = re.sub(r',\s*}', '}', json_content)  # Remove trailing commas before }
+                json_content = re.sub(r',\s*]', ']', json_content)  # Remove trailing commas before ]
+                
+                try:
+                    itinerary_data = json.loads(json_content)
+                    logger.info("Successfully parsed JSON after fixing trailing commas")
+                except json.JSONDecodeError as e2:
+                    logger.error(f"Failed to parse itinerary JSON even after fixes: {e2}")
+                    logger.error(f"JSON content: {json_content[:500]}...")
+                    
+                    # Return a fallback itinerary
+                    itinerary_data = {
+                        "tripOverview": {
+                            "title": f"{destination} Adventure",
+                            "destination": destination,
+                            "duration": duration,
+                            "travelers": travelers,
+                            "bestTime": "Year-round",
+                            "weather": "Tropical",
+                            "summary": f"An amazing {duration} adventure in {destination}!"
+                        },
+                        "dailyItinerary": [
+                            {
+                                "day": 1,
+                                "title": "Arrival and Exploration",
+                                "morning": ["Check into hotel", "Explore local area"],
+                                "afternoon": ["Visit main attractions", "Local lunch"],
+                                "evening": ["Dinner at local restaurant", "Evening stroll"],
+                                "accommodation": "3-star hotel",
+                                "meals": ["Breakfast", "Lunch", "Dinner"],
+                                "transportation": "Local transport"
+                            }
+                        ],
+                        "budgetBreakdown": {
+                            "accommodation": {"total": 350, "perNight": 50, "type": "3-star hotel"},
+                            "meals": {"total": 210, "perDay": 30},
+                            "activities": {"total": 180},
+                            "transportation": {"total": 120},
+                            "miscellaneous": {"total": 50},
+                            "totalTripCost": 910,
+                            "costPerPerson": 455,
+                            "currency": "USD"
+                        },
+                        "travelTips": [
+                            {"category": "Packing", "tips": ["Pack light", "Bring sunscreen", "Comfortable shoes"]},
+                            {"category": "Local Customs", "tips": ["Respect local culture", "Learn basic phrases", "Dress appropriately"]}
+                        ],
+                        "accommodations": [
+                            {"name": "Local Hotel", "type": "3-star", "location": "City center", "price": "50/night"}
+                        ],
+                        "restaurants": [
+                            {"name": "Local Restaurant", "cuisine": "Local", "priceRange": "$$"}
+                        ]
+                    }
+            
+            logger.info(f"Successfully generated detailed itinerary with {len(itinerary_data.get('dailyItinerary', []))} days")
+            
+            return {
+                "success": True,
+                "data": itinerary_data,
+                "generated_at": datetime.now().isoformat()
+            }
+        else:
+            logger.error(f"No JSON found in itinerary response")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to generate itinerary"
+            )
+            
+    except Exception as e:
+        logger.error(f"Error generating detailed itinerary: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate itinerary: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn
